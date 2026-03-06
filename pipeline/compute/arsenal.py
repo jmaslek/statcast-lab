@@ -1,0 +1,228 @@
+"""Pitcher arsenal profiles: per-pitcher, per-pitch-type seasonal aggregates."""
+
+import polars as pl
+from loguru import logger
+
+from pipeline.compute._common import Client, delete_season
+
+
+def compute_arsenal_for_season(
+    client: Client,
+    season: int,
+    min_pitches: int = 50,
+) -> int:
+    """Compute pitcher arsenal profiles for a season. Returns row count written."""
+    logger.info(
+        "Computing arsenal profiles for %d (min_pitches=%d)...", season, min_pitches
+    )
+
+    result = client.query(
+        """
+        SELECT
+            pitcher,
+            pitch_type,
+            any(pitch_name) AS pitch_name,
+
+            -- Volume
+            count() AS pitch_count,
+
+            -- Velocity
+            avg(release_speed) AS avg_velo,
+            max(release_speed) AS max_velo,
+
+            -- Spin & Movement (pfx in feet -> inches)
+            avg(release_spin_rate) AS avg_spin,
+            avg(pfx_x) * 12 AS avg_pfx_x,
+            avg(pfx_z) * 12 AS avg_pfx_z,
+
+            -- Whiff & CSW components
+            countIf(description IN (
+                'swinging_strike', 'swinging_strike_blocked', 'foul_tip'
+            )) AS whiffs,
+            countIf(description IN (
+                'swinging_strike', 'swinging_strike_blocked', 'foul', 'foul_tip',
+                'hit_into_play', 'hit_into_play_no_out', 'hit_into_play_score'
+            )) AS swings,
+            countIf(description = 'called_strike') AS called_strikes,
+
+            -- Zone / Chase components
+            countIf(zone BETWEEN 1 AND 9) AS in_zone,
+            countIf(NOT (zone BETWEEN 1 AND 9)) AS out_of_zone,
+            countIf(
+                NOT (zone BETWEEN 1 AND 9)
+                AND description IN (
+                    'swinging_strike', 'swinging_strike_blocked', 'foul', 'foul_tip',
+                    'hit_into_play', 'hit_into_play_no_out', 'hit_into_play_score'
+                )
+            ) AS chases,
+
+            -- Put-away: two-strike pitches that result in a strikeout
+            countIf(strikes = 2) AS two_strike_pitches,
+            countIf(strikes = 2 AND events IN ('strikeout', 'strikeout_double_play')) AS put_aways,
+
+            -- Batted ball
+            avgIf(launch_speed, launch_speed IS NOT NULL) AS avg_exit_velo_raw,
+            countIf(bb_type = 'ground_ball') AS ground_balls,
+            countIf(bb_type IS NOT NULL) AS total_batted_balls
+
+        FROM pitches
+        WHERE game_year = {season:UInt16}
+          AND game_type = 'R'
+          AND pitch_type IS NOT NULL
+          AND pitch_type != ''
+        GROUP BY pitcher, pitch_type
+        HAVING pitch_count >= {min_pitches:UInt32}
+        ORDER BY pitcher, pitch_count DESC
+        """,
+        parameters={"season": season, "min_pitches": min_pitches},
+    )
+
+    if not result.result_rows:
+        logger.warning("No arsenal data found for %d", season)
+        return 0
+
+    columns = [
+        "pitcher",
+        "pitch_type",
+        "pitch_name",
+        "pitch_count",
+        "avg_velo",
+        "max_velo",
+        "avg_spin",
+        "avg_pfx_x",
+        "avg_pfx_z",
+        "whiffs",
+        "swings",
+        "called_strikes",
+        "in_zone",
+        "out_of_zone",
+        "chases",
+        "two_strike_pitches",
+        "put_aways",
+        "avg_exit_velo_raw",
+        "ground_balls",
+        "total_batted_balls",
+    ]
+    df = pl.DataFrame(result.result_rows, schema=columns, orient="row")
+
+    logger.info("Processing %d pitcher-pitch_type rows...", len(df))
+
+    # Usage % from pitcher totals
+    pitcher_totals = df.group_by("pitcher").agg(
+        pl.col("pitch_count").sum().alias("total_pitches")
+    )
+    df = df.join(pitcher_totals, on="pitcher")
+
+    df = df.with_columns(
+        [
+            (pl.col("pitch_count") / pl.col("total_pitches") * 100)
+            .round(1)
+            .alias("usage_pct"),
+            # Whiff% = whiffs / swings * 100
+            (
+                pl.when(pl.col("swings") > 0)
+                .then(pl.col("whiffs") / pl.col("swings") * 100)
+                .otherwise(0.0)
+            )
+            .round(1)
+            .alias("whiff_pct"),
+            # CSW% = (called_strikes + whiffs) / pitch_count * 100
+            (
+                (pl.col("called_strikes") + pl.col("whiffs"))
+                / pl.col("pitch_count")
+                * 100
+            )
+            .round(1)
+            .alias("csw_pct"),
+            # Put-away% = put_aways / two_strike_pitches * 100
+            (
+                pl.when(pl.col("two_strike_pitches") > 0)
+                .then(pl.col("put_aways") / pl.col("two_strike_pitches") * 100)
+                .otherwise(0.0)
+            )
+            .round(1)
+            .alias("put_away_pct"),
+            # Zone% = in_zone / pitch_count * 100
+            (pl.col("in_zone") / pl.col("pitch_count") * 100)
+            .round(1)
+            .alias("zone_pct"),
+            # Chase% = chases / out_of_zone * 100
+            (
+                pl.when(pl.col("out_of_zone") > 0)
+                .then(pl.col("chases") / pl.col("out_of_zone") * 100)
+                .otherwise(0.0)
+            )
+            .round(1)
+            .alias("chase_pct"),
+            # GB% = ground_balls / total_batted_balls * 100
+            (
+                pl.when(pl.col("total_batted_balls") > 0)
+                .then(pl.col("ground_balls") / pl.col("total_batted_balls") * 100)
+                .otherwise(0.0)
+            )
+            .round(1)
+            .alias("gb_pct"),
+            # Round raw averages
+            pl.col("avg_velo").round(1),
+            pl.col("max_velo").round(1),
+            pl.col("avg_spin").round(0),
+            pl.col("avg_pfx_x").round(1),
+            pl.col("avg_pfx_z").round(1),
+            pl.col("avg_exit_velo_raw").fill_null(0.0).round(1).alias("avg_exit_velo"),
+        ]
+    )
+
+    # Select final columns in table order
+    final = df.select(
+        [
+            "pitcher",
+            pl.lit(season).cast(pl.UInt16).alias("season"),
+            "pitch_type",
+            "pitch_name",
+            "pitch_count",
+            "usage_pct",
+            "avg_velo",
+            "max_velo",
+            "avg_spin",
+            "avg_pfx_x",
+            "avg_pfx_z",
+            "whiff_pct",
+            "csw_pct",
+            "put_away_pct",
+            "zone_pct",
+            "chase_pct",
+            "avg_exit_velo",
+            "gb_pct",
+        ]
+    )
+
+    logger.info("Writing arsenal data for %d rows...", len(final))
+    delete_season(client, "pitcher_arsenal", season)
+
+    client.insert(
+        "pitcher_arsenal",
+        final.rows(),
+        column_names=[
+            "pitcher",
+            "season",
+            "pitch_type",
+            "pitch_name",
+            "pitch_count",
+            "usage_pct",
+            "avg_velo",
+            "max_velo",
+            "avg_spin",
+            "avg_pfx_x",
+            "avg_pfx_z",
+            "whiff_pct",
+            "csw_pct",
+            "put_away_pct",
+            "zone_pct",
+            "chase_pct",
+            "avg_exit_velo",
+            "gb_pct",
+        ],
+    )
+
+    logger.info("Wrote %d arsenal rows for %d", len(final), season)
+    return len(final)

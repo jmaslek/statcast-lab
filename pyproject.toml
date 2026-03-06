@@ -1,0 +1,34 @@
+[project]
+name = "mlb-app"
+version = "0.1.0"
+description = "Baseball analytics app powered by Statcast data"
+requires-python = ">=3.13"
+dependencies = [
+    "litestar[standard]",
+    "clickhouse-connect",
+    "pydantic>=2.0",
+    "polars",
+    "pybaseball",
+    "click",
+    "uvicorn",
+    "httpx",
+    "loguru>=0.7.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-httpx",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pipeline", "backend"]
+
+[project.scripts]
+mlb = "pipeline.cli:cli"
