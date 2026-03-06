@@ -82,11 +82,48 @@ CREATE TABLE IF NOT EXISTS pitches (
     post_fld_score Nullable(Int16),
     delta_run_exp Nullable(Float32),
 
+    -- Win probability
+    delta_home_win_exp Nullable(Float32),
+    home_win_exp Nullable(Float32),
+    bat_win_exp Nullable(Float32),
+    delta_pitcher_run_exp Nullable(Float32),
+
     -- Fielding context
     if_fielding_alignment LowCardinality(Nullable(String)),
     of_fielding_alignment LowCardinality(Nullable(String)),
     hit_location Nullable(UInt8),
     bb_type LowCardinality(Nullable(String)),
+    fielder_3 Nullable(UInt32),
+    fielder_4 Nullable(UInt32),
+    fielder_5 Nullable(UInt32),
+    fielder_6 Nullable(UInt32),
+    fielder_7 Nullable(UInt32),
+    fielder_8 Nullable(UInt32),
+    fielder_9 Nullable(UInt32),
+
+    -- Swing tracking
+    bat_speed Nullable(Float32),
+    swing_length Nullable(Float32),
+    attack_angle Nullable(Float32),
+    swing_path_tilt Nullable(Float32),
+    intercept_ball_minus_batter_pos_x_inches Nullable(Float32),
+    intercept_ball_minus_batter_pos_y_inches Nullable(Float32),
+
+    -- Pitcher arm angle
+    arm_angle Nullable(Float32),
+
+    -- Break metrics
+    api_break_z_with_gravity Nullable(Float32),
+    api_break_x_arm Nullable(Float32),
+    api_break_x_batter_in Nullable(Float32),
+
+    -- Game context
+    n_thruorder_pitcher Nullable(UInt8),
+    n_priorpa_thisgame_player_at_bat Nullable(UInt8),
+
+    -- Validation
+    woba_value Nullable(Float32),
+    woba_denom Nullable(Float32),
 
     -- Metadata
     des Nullable(String),
@@ -138,6 +175,7 @@ CREATE TABLE IF NOT EXISTS player_season_hitting (
     triples UInt64,
     home_runs UInt64,
     walks UInt64,
+    intent_walks UInt64,
     strikeouts UInt64,
     hbp UInt64,
     sac_flies UInt64,
@@ -179,6 +217,7 @@ AS SELECT
     countIf(events = 'triple') AS triples,
     countIf(events = 'home_run') AS home_runs,
     countIf(events = 'walk') AS walks,
+    countIf(events = 'intent_walk') AS intent_walks,
     countIf(events IN ('strikeout', 'strikeout_double_play')) AS strikeouts,
     countIf(events = 'hit_by_pitch') AS hbp,
     countIf(events = 'sac_fly') AS sac_flies,
@@ -201,6 +240,7 @@ AS SELECT
     countIf(estimated_woba_using_speedangle IS NOT NULL) AS xwoba_count
 FROM pitches
 WHERE events IS NOT NULL
+  AND events != 'truncated_pa'
 GROUP BY batter, game_year
 """
 
@@ -235,7 +275,7 @@ AS SELECT
     pitcher,
     game_year AS season,
     count() AS total_pitches,
-    countIf(events IS NOT NULL) AS batters_faced,
+    countIf(events IS NOT NULL AND events != 'truncated_pa') AS batters_faced,
     countIf(events IN ('strikeout', 'strikeout_double_play')) AS strikeouts,
     countIf(events = 'walk') AS walks,
     countIf(events IN ('single', 'double', 'triple', 'home_run')) AS hits_allowed,

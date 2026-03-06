@@ -79,6 +79,7 @@ SELECT
 FROM pitches
 WHERE game_year = {season:UInt16}
   AND events IS NOT NULL
+  AND events != 'truncated_pa'
   AND game_type = 'R'
   AND bat_score IS NOT NULL
   AND post_bat_score IS NOT NULL
@@ -356,6 +357,7 @@ def compute_linear_weights(
         FROM pitches
         WHERE game_year = {season:UInt16}
           AND events IS NOT NULL
+  AND events != 'truncated_pa'
           AND game_type = 'R'
           AND bat_score IS NOT NULL
           AND post_bat_score IS NOT NULL

@@ -107,6 +107,83 @@ def compute():
     """Calculate derived metrics."""
 
 
+def _compute_all_for_season(client, season: int) -> None:
+    """Run all compute steps for a single season in the correct order."""
+    click.echo(f"\n{'='*50}")
+    click.echo(f"Computing all derived metrics for {season}")
+    click.echo(f"{'='*50}")
+
+    click.echo(f"[{season}] RE matrix...")
+    matrix = compute_re_matrix(client, season)
+    click.echo(f"  -> {len(matrix)} states")
+
+    click.echo(f"[{season}] Linear weights...")
+    weights = compute_linear_weights(client, season, re_matrix=matrix)
+    click.echo(f"  -> w1B={weights['w1B']:.3f}, wHR={weights['wHR']:.3f}")
+
+    click.echo(f"[{season}] Player RE24...")
+    count = compute_player_re24(client, season, re_matrix=matrix)
+    click.echo(f"  -> {count} players")
+
+    click.echo(f"[{season}] wOBA...")
+    count = compute_woba_for_season(client, season)
+    click.echo(f"  -> {count} players")
+
+    click.echo(f"[{season}] Batting WAR...")
+    count = compute_batting_war(client, season)
+    click.echo(f"  -> {count} players")
+
+    click.echo(f"[{season}] FIP...")
+    count = compute_fip_for_season(client, season)
+    click.echo(f"  -> {count} pitchers")
+
+    click.echo(f"[{season}] Pitching WAR...")
+    count = compute_pitching_war(client, season)
+    click.echo(f"  -> {count} pitchers")
+
+    click.echo(f"[{season}] Arsenal...")
+    count = compute_arsenal_for_season(client, season)
+    click.echo(f"  -> {count} pitcher-pitch rows")
+
+    click.echo(f"[{season}] Batted ball...")
+    count = compute_batted_ball_for_season(client, season)
+    click.echo(f"  -> {count} batters")
+
+    click.echo(f"[{season}] Platoon splits...")
+    count = compute_platoon_splits_for_season(client, season)
+    click.echo(f"  -> {count} batter-split rows")
+
+    click.echo(f"[{season}] Park factors...")
+    count = compute_park_factors(client, season)
+    click.echo(f"  -> {count} teams")
+
+    click.echo(f"[{season}] Framing...")
+    count = compute_framing_for_season(client, season)
+    click.echo(f"  -> {count} catchers")
+
+    click.echo(f"[{season}] Done.")
+
+
+@compute.command("all")
+@click.option("--season", required=True, type=int, help="Season year")
+def compute_all(season):
+    """Run all compute steps for a season in the correct order."""
+    client = get_client()
+    _compute_all_for_season(client, season)
+    client.close()
+
+
+@compute.command("all-seasons")
+@click.option("--start", default=2020, type=int, help="First season")
+@click.option("--end", default=2025, type=int, help="Last season")
+def compute_all_seasons(start, end):
+    """Run all compute steps for a range of seasons."""
+    client = get_client()
+    for season in range(start, end + 1):
+        _compute_all_for_season(client, season)
+    client.close()
+
+
 @compute.command()
 @click.option("--season", required=True, type=int, help="Season year")
 @click.option("--min-pa", default=50, help="Minimum plate appearances")

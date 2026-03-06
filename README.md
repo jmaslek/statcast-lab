@@ -7,6 +7,7 @@ and infrastructure set up as well to expose the advanced statistics. I used Base
 In this repository are a couple different layers that have served me well:
 
 ## Architecture
+Here is how this works right now
 
 ```
 pybaseball -> Polars -> ClickHouse -> Litestar API -> React + D3.js
@@ -20,7 +21,7 @@ pybaseball -> Polars -> ClickHouse -> Litestar API -> React + D3.js
 | **Frontend** | React 19, TypeScript, Vite, shadcn/ui, D3.js, TanStack Query |
 
 
-I 100% vibe coded the frontend :)
+The frontend was built by my good friend Claude.
 
 ## What It Computes
 
@@ -137,9 +138,9 @@ All other stats — wOBA, wRC+, FIP, WAR, RE24, arsenal profiles, batted ball pr
 
 ## Roadmap
 
-- **Custom xBA/xwOBA model** — Replace Statcast's black-box expected stats with our own model. The raw inputs (launch speed, launch angle) are already in our database; a 2D kernel regression or Bayesian model over historical batted ball outcomes would give us full control over the expected stats pipeline.
-- **Pitch sequencing / Markov models** — Model pitcher tendencies as count-dependent transition matrices between pitch types. Measure sequencing entropy (predictable vs. unpredictable pitchers).
-- **Bayesian whiff model** — Hierarchical logistic regression predicting P(whiff | pitch characteristics, count, batter, pitcher) to derive "stuff+"-style metrics. All the features are already in the pitches table — this is mostly a PyMC/Stan project at this point.
+- **MLB StatsAPI Integration** - Some events aren't present in the statcast data (like steals, or pickoffs etc).  Adding that would allow us to dive deeper.
+- **Custom xBA/xwOBA model** - Replace Statcast's black-box expected stats with our own model. The raw inputs (launch speed, launch angle) are already in our database; a 2D kernel regression or Bayesian model over historical batted ball outcomes would give us full control over the expected stats pipeline.
+- **Pitch sequencing / Markov models** - Model pitcher tendencies as count-dependent transition matrices between pitch types. Measure sequencing entropy (predictable vs. unpredictable pitchers).
 
 ## Known Limitations
 

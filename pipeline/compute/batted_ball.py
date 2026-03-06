@@ -61,6 +61,7 @@ def compute_batted_ball_for_season(
         WHERE game_year = {season:UInt16}
           AND game_type = 'R'
           AND events IS NOT NULL
+  AND events != 'truncated_pa'
           AND bb_type IS NOT NULL
         GROUP BY batter
         HAVING bbe >= {min_bbe:UInt32}

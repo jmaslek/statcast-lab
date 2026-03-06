@@ -50,6 +50,7 @@ def _compute_league_fip_constant(
         FROM pitches
         WHERE game_year = {{season:UInt16}}
           AND events IS NOT NULL
+  AND events != 'truncated_pa'
           AND game_type = 'R'
           AND bat_score IS NOT NULL
           AND post_bat_score IS NOT NULL
@@ -103,6 +104,7 @@ def compute_fip_for_season(
         FROM pitches
         WHERE game_year = {{season:UInt16}}
           AND events IS NOT NULL
+  AND events != 'truncated_pa'
           AND game_type = 'R'
         GROUP BY pitcher
         HAVING outs_recorded >= {{min_outs:UInt32}}

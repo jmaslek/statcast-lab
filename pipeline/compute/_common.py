@@ -30,6 +30,9 @@ TWO_OUT_EVENTS = {
 }
 THREE_OUT_EVENTS = {"triple_play"}
 
+# Events that are not real plate appearances
+NON_PA_EVENTS = {"truncated_pa"}
+
 
 def outs_recorded_sql() -> str:
     """SQL expression counting outs from event types."""
@@ -41,6 +44,12 @@ def outs_recorded_sql() -> str:
         f"+ countIf(events IN ({two})) * 2 "
         f"+ countIf(events IN ({three})) * 3"
     )
+
+
+def non_pa_filter_sql() -> str:
+    """SQL WHERE clause fragment to exclude non-PA events."""
+    excluded = ", ".join(f"'{e}'" for e in sorted(NON_PA_EVENTS))
+    return f"AND events NOT IN ({excluded})"
 
 
 def base_out_state_expr() -> pl.Expr:

@@ -54,6 +54,7 @@ def compute_platoon_splits_for_season(
         WHERE game_year = {season:UInt16}
           AND game_type = 'R'
           AND events IS NOT NULL
+          AND events != 'truncated_pa'
         GROUP BY batter, p_throws
         HAVING pa >= {min_pa:UInt32}
         ORDER BY batter, p_throws

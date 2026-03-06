@@ -20,6 +20,7 @@ def compute_park_factors(client: Client, season: int) -> int:
         WHERE game_year = {season:UInt16}
           AND game_type = 'R'
           AND events IS NOT NULL
+  AND events != 'truncated_pa'
           AND bat_score IS NOT NULL
           AND post_bat_score IS NOT NULL
         GROUP BY home_team
@@ -42,6 +43,7 @@ def compute_park_factors(client: Client, season: int) -> int:
         WHERE game_year = {season:UInt16}
           AND game_type = 'R'
           AND events IS NOT NULL
+  AND events != 'truncated_pa'
           AND bat_score IS NOT NULL
           AND post_bat_score IS NOT NULL
         GROUP BY away_team

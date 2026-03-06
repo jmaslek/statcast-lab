@@ -79,11 +79,42 @@ STATCAST_COLUMNS: list[str] = [
     "post_bat_score",
     "post_fld_score",
     "delta_run_exp",
+    # Win probability
+    "delta_home_win_exp",
+    "home_win_exp",
+    "bat_win_exp",
+    "delta_pitcher_run_exp",
     # Fielding context
     "if_fielding_alignment",
     "of_fielding_alignment",
     "hit_location",
     "bb_type",
+    "fielder_3",
+    "fielder_4",
+    "fielder_5",
+    "fielder_6",
+    "fielder_7",
+    "fielder_8",
+    "fielder_9",
+    # Swing tracking
+    "bat_speed",
+    "swing_length",
+    "attack_angle",
+    "swing_path_tilt",
+    "intercept_ball_minus_batter_pos_x_inches",
+    "intercept_ball_minus_batter_pos_y_inches",
+    # Pitcher arm angle
+    "arm_angle",
+    # Break metrics
+    "api_break_z_with_gravity",
+    "api_break_x_arm",
+    "api_break_x_batter_in",
+    # Game context
+    "n_thruorder_pitcher",
+    "n_priorpa_thisgame_player_at_bat",
+    # Validation
+    "woba_value",
+    "woba_denom",
     # Metadata
     "des",
     "sv_id",
