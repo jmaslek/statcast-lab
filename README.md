@@ -59,39 +59,64 @@ docker compose up -d
 uv run mlb init-db
 ```
 
-### Load Data
+### Running the pipeline
+
+The pipeline has three layers — ingest (Statcast pitches, rosters, play-by-play,
+ABS challenges), compute (everything derived from the raw data), and a daily
+catch-up that chains them. For normal use you only need the catch-up:
 
 ```bash
-# Backfill a season (takes ~15-30 min per season)
+# One-shot: detects the last loaded date for the current season and runs
+# rosters -> Statcast backfill -> play-by-play -> ABS -> all compute.
+# Idempotent — safe to re-run as often as you want.
+uv run mlb catch-up
+
+# Limit to a specific season / end date (defaults: current year, yesterday)
+uv run mlb catch-up --season 2026 --end 2026-04-21
+
+# Skip the expensive steps if you only want fresh ingest
+uv run mlb catch-up --skip-compute
+uv run mlb catch-up --skip-abs
+```
+
+This is also what you'd wire into cron. For the first-ever load of a historical
+season, use `backfill` directly since `catch-up` only pulls forward from the
+last loaded date:
+
+```bash
+# Backfill a full season (~15-30 min)
 uv run mlb backfill --start 2025-03-27 --end 2025-09-28
+uv run mlb plays    --season 2025
+uv run mlb abs      --season 2025
+uv run mlb compute  all --season 2025
 
-# Load player/team metadata
-uv run mlb players --season 2025
+# Or recompute every derived metric across a range of seasons
+uv run mlb compute all-seasons --start 2020 --end 2025
 ```
 
-### Compute Metrics
+Individual commands are there when you want to iterate on one metric:
 
-```bash
-# Core stats
-uv run mlb compute woba --season 2025
-uv run mlb compute fip --season 2025
+| Command | What it does |
+|---|---|
+| `mlb daily` | Pull yesterday's pitches (smallest possible ingest) |
+| `mlb players --season S` | Refresh 40-man rosters and team dimension |
+| `mlb plays --season S` | Play-by-play + runner events from MLB Stats API |
+| `mlb abs --season S` | ABS challenge leaderboard + recent events |
+| `mlb compute all-re --season S` | RE matrix → linear weights → player RE24 |
+| `mlb compute woba --season S` | wOBA + park-adjusted wRC+ |
+| `mlb compute fip --season S` | FIP against our own RA/9-based constant |
+| `mlb compute batting-war --season S` | Batting WAR from wOBA |
+| `mlb compute pitching-war --season S` | RA9-WAR and RE24-WAR |
+| `mlb compute arsenal --season S` | Pitch-type profiles (velo, spin, whiff%, CSW%, ...) |
+| `mlb compute batted-ball --season S` | Launch angle/velo, pull/center/oppo, barrel%, sweet spot% |
+| `mlb compute platoon-splits --season S` | Batter stats vs LHP/RHP |
+| `mlb compute framing --season S` | Catcher framing runs |
+| `mlb compute park-factors --season S` | One-year halved park factors per venue |
+| `mlb compute percentiles --season S` | Savant-style 1–99 sliders for batters + pitchers |
+| `mlb compute re-count-matrix --season S` | 288-state RE by base-out × count |
+| `mlb compute abs-challenges --season S` | Rebuild per-event ABS table from MLB Stats API |
 
-# Run expectancy pipeline (RE matrix -> linear weights -> player RE24)
-uv run mlb compute all-re --season 2025
-
-# WAR
-uv run mlb compute batting-war --season 2025
-uv run mlb compute pitching-war --season 2025
-
-# Advanced
-uv run mlb compute arsenal --season 2025
-uv run mlb compute batted-ball --season 2025
-uv run mlb compute platoon-splits --season 2025
-uv run mlb compute framing --season 2025
-uv run mlb compute park-factors --season 2025
-```
-
-### Run the App
+### Run the app
 
 ```bash
 # Backend (port 8000)
