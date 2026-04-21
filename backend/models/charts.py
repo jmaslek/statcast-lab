@@ -64,3 +64,52 @@ class MovementData(BaseModel):
     p_throws: str
     league_averages: list[LeagueAverageMovement]
     pitch_summary: list[PitchTypeSummary]
+
+
+class PitcherMovementSet(BaseModel):
+    pitcher_id: int
+    name: str
+    p_throws: str
+    points: list[MovementPoint]
+    pitch_summary: list[PitchTypeSummary]
+
+
+class ArsenalComparisonData(BaseModel):
+    pitchers: list[PitcherMovementSet]
+    league_averages: list[LeagueAverageMovement]
+    season: int
+
+
+class RollingDataPoint(BaseModel):
+    date: str
+    value: float
+    sample: int
+
+
+class RollingStatsData(BaseModel):
+    player_id: int
+    season: int
+    stat: str
+    window: int
+    league_avg: float | None
+    data: list[RollingDataPoint]
+
+
+# ---- Zone Profile models ----
+
+
+class ZoneProfileBin(BaseModel):
+    x: float  # bin center x
+    y: float  # bin center y
+    whiff_pct: float | None
+    swing_pct: float | None
+    called_strike_pct: float | None
+    zone_pct: float | None  # % of pitches in this bin
+    total: int
+
+
+class ZoneProfileData(BaseModel):
+    player_id: int
+    season: int
+    role: str
+    bins: list[ZoneProfileBin]

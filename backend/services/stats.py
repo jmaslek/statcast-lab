@@ -3,7 +3,7 @@
 from backend.db import Client
 from backend.models.hitting import HittingLeaderRow
 from backend.models.pitching import PitchingLeaderRow
-from backend.utils import safe_div
+from backend.utils import safe_div, sort_and_limit
 
 _HITTING_SORT_COLS = {
     "avg",
@@ -21,6 +21,8 @@ _HITTING_SORT_COLS = {
     "strikeouts",
     "xba",
     "xwoba",
+    "woba",
+    "wrc_plus",
 }
 
 _PITCHING_SORT_COLS = {
@@ -46,7 +48,9 @@ def get_hitting_leaderboard(
     team: str | None = None,
     sort: str = "ops",
     limit: int = 50,
-) -> list[HittingLeaderRow]:
+    desc: bool = True,
+    offset: int = 0,
+) -> tuple[list[HittingLeaderRow], int]:
     """Query player_season_hitting and compute derived batting stats."""
     team_filter = ""
     params: dict = {
@@ -66,9 +70,12 @@ def get_hitting_leaderboard(
             h.launch_speed_sum, h.launch_speed_count,
             h.barrel_count, h.batted_ball_events, h.hard_hit_count,
             h.singles, h.doubles, h.triples, h.hbp, h.sac_flies, h.total_bases,
-            h.xba_sum, h.xba_count, h.xwoba_sum, h.xwoba_count
+            h.xba_sum, h.xba_count, h.xwoba_sum, h.xwoba_count,
+            w.woba, w.wrc_plus
         FROM player_season_hitting AS h FINAL
         JOIN players AS p FINAL ON h.batter = p.player_id
+        LEFT JOIN player_woba AS w FINAL
+            ON h.batter = w.player_id AND w.season = {{season:UInt16}}
         WHERE h.season = {{season:UInt16}}
           AND h.pa >= {{min_pa:UInt64}}
           {team_filter}
@@ -102,6 +109,8 @@ def get_hitting_leaderboard(
             xba_count,
             xwoba_sum,
             xwoba_count,
+            woba_val,
+            wrc_plus_val,
         ) = row
 
         avg = safe_div(hits, ab)
@@ -134,13 +143,12 @@ def get_hitting_leaderboard(
                 hard_hit_pct=round(hard_hit_pct, 1),
                 xba=xba,
                 xwoba=xwoba,
+                woba=round(woba_val, 3) if woba_val is not None else None,
+                wrc_plus=round(wrc_plus_val, 1) if wrc_plus_val is not None else None,
             )
         )
 
-    if sort in _HITTING_SORT_COLS:
-        players.sort(key=lambda p: getattr(p, sort), reverse=True)
-
-    return players[:limit]
+    return sort_and_limit(players, sort, _HITTING_SORT_COLS, desc, limit, offset=offset)
 
 
 def get_pitching_leaderboard(
@@ -150,7 +158,9 @@ def get_pitching_leaderboard(
     team: str | None = None,
     sort: str = "k_pct",
     limit: int = 50,
-) -> list[PitchingLeaderRow]:
+    desc: bool = True,
+    offset: int = 0,
+) -> tuple[list[PitchingLeaderRow], int]:
     """Query player_season_pitching and compute derived pitching stats."""
     team_filter = ""
     params: dict = {
@@ -232,7 +242,4 @@ def get_pitching_leaderboard(
             )
         )
 
-    if sort in _PITCHING_SORT_COLS:
-        players.sort(key=lambda p: getattr(p, sort), reverse=True)
-
-    return players[:limit]
+    return sort_and_limit(players, sort, _PITCHING_SORT_COLS, desc, limit, offset=offset)

@@ -4,16 +4,26 @@ from litestar import Controller, get
 
 from backend.db import Client
 from backend.models.hitting import (
+    AbsChallengeEvent,
+    AbsChallengeEventList,
+    AbsChallengeRow,
+    AbsLeaderboard,
+    BaserunningLeaderboard,
+    BaserunningRow,
+    BatTrackingLeaderboard,
+    BatTrackingRow,
     BattedBallLeaderboard,
     BattedBallRow,
     ExpectedStatsLeaderboard,
     ExpectedStatsRow,
     HittingLeaderboard,
+    PitcherBaserunningLeaderboard,
+    PitcherBaserunningRow,
     PlatoonLeaderboard,
     PlatoonRow,
 )
 from backend.services.stats import get_hitting_leaderboard
-from backend.utils import safe_div, safe_pct
+from backend.utils import safe_div, safe_pct, sort_and_limit
 
 _XSTATS_SORT_COLS = {
     "ba_diff",
@@ -65,9 +75,11 @@ class HittingController(Controller):
         team: str | None = None,
         sort: str = "ops",
         limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
     ) -> HittingLeaderboard:
-        players = get_hitting_leaderboard(client, season, min_pa, team, sort, limit)
-        return HittingLeaderboard(players=players, season=season, total=len(players))
+        players, total = get_hitting_leaderboard(client, season, min_pa, team, sort, limit, desc=desc, offset=offset)
+        return HittingLeaderboard(players=players, season=season, total=total)
 
     @get("/expected-stats")
     async def expected_stats(
@@ -77,6 +89,8 @@ class HittingController(Controller):
         min_pa: int = 100,
         sort: str = "woba_diff",
         limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
     ) -> ExpectedStatsLeaderboard:
         result = client.query(
             """
@@ -134,17 +148,9 @@ class HittingController(Controller):
                 )
             )
 
-        if sort in _XSTATS_SORT_COLS:
-            players.sort(
-                key=lambda p: (
-                    getattr(p, sort) if getattr(p, sort) is not None else -999
-                ),
-                reverse=True,
-            )
-
-        players = players[:limit]
+        players, total = sort_and_limit(players, sort, _XSTATS_SORT_COLS, desc, limit, offset=offset)
         return ExpectedStatsLeaderboard(
-            players=players, season=season, total=len(players)
+            players=players, season=season, total=total
         )
 
     @get("/batted-ball")
@@ -155,6 +161,8 @@ class HittingController(Controller):
         min_bbe: int = 25,
         sort: str = "bbe",
         limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
     ) -> BattedBallLeaderboard:
         result = client.query(
             """
@@ -215,11 +223,8 @@ class HittingController(Controller):
                 )
             )
 
-        if sort in _BB_SORT_COLS:
-            players.sort(key=lambda r: getattr(r, sort), reverse=True)
-
-        players = players[:limit]
-        return BattedBallLeaderboard(players=players, season=season, total=len(players))
+        players, total = sort_and_limit(players, sort, _BB_SORT_COLS, desc, limit, offset=offset)
+        return BattedBallLeaderboard(players=players, season=season, total=total)
 
     @get("/platoon")
     async def platoon(
@@ -229,6 +234,8 @@ class HittingController(Controller):
         min_pa: int = 30,
         sort: str = "ops_diff",
         limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
     ) -> PlatoonLeaderboard:
         result = client.query(
             """
@@ -318,13 +325,366 @@ class HittingController(Controller):
                 )
             )
 
-        if sort in _PLATOON_SORT_COLS:
-            players.sort(
-                key=lambda r: (
-                    getattr(r, sort) if getattr(r, sort) is not None else -999
-                ),
-                reverse=True,
+        players, total = sort_and_limit(players, sort, _PLATOON_SORT_COLS, desc, limit, offset=offset)
+        return PlatoonLeaderboard(players=players, season=season, total=total)
+
+    @get("/baserunning")
+    async def baserunning(
+        self,
+        client: Client,
+        season: int = 2026,
+        min_att: int = 3,
+        sort: str = "sb",
+        limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
+    ) -> BaserunningLeaderboard:
+        """Baserunning leaderboard from play-by-play runner events."""
+        result = client.query(
+            """
+            SELECT
+                pr.runner_id,
+                p.name_full AS name,
+                countIf(pr.movement_reason LIKE 'r_stolen_base%') AS sb,
+                countIf(pr.movement_reason LIKE 'r_caught_stealing%'
+                     OR pr.movement_reason LIKE 'r_pickoff_caught_stealing%') AS cs,
+                countIf(pr.movement_reason = 'r_stolen_base_2b') AS sb_2b,
+                countIf(pr.movement_reason = 'r_stolen_base_3b') AS sb_3b,
+                countIf(pr.movement_reason = 'r_stolen_base_home') AS sb_home,
+                countIf(pr.movement_reason LIKE 'r_pickoff_%'
+                    AND pr.movement_reason NOT LIKE '%caught_stealing%'
+                    AND pr.movement_reason NOT LIKE '%error%') AS pickoffs,
+                countIf(pr.event = 'Wild Pitch') AS wp_advances,
+                countIf(pr.event = 'Passed Ball') AS pb_advances
+            FROM play_runners AS pr
+            LEFT JOIN players AS p FINAL ON pr.runner_id = p.player_id
+            WHERE pr.season = {season:UInt16}
+            GROUP BY pr.runner_id, p.name_full
+            HAVING sb + cs >= {min_att:UInt32}
+            """,
+            parameters={"season": season, "min_att": min_att},
+        )
+
+        players = []
+        for (
+            player_id, name, sb, cs,
+            sb_2b, sb_3b, sb_home,
+            pickoffs, wp_adv, pb_adv,
+        ) in result.result_rows:
+            total_att = sb + cs
+            sb_pct = round(safe_div(sb, total_att) * 100, 1) if total_att else 0.0
+            # Approximate baserunning runs: SB*0.2 - CS*0.45
+            br_runs = round(sb * 0.2 - cs * 0.45, 1)
+
+            players.append(BaserunningRow(
+                player_id=player_id,
+                name=name or str(player_id),
+                sb=sb, cs=cs, sb_pct=sb_pct,
+                sb_2b=sb_2b, sb_3b=sb_3b, sb_home=sb_home,
+                pickoffs=pickoffs,
+                wp_advances=wp_adv, pb_advances=pb_adv,
+                br_runs=br_runs,
+            ))
+
+        _BR_SORT_COLS = {
+            "sb", "cs", "sb_pct", "sb_2b", "sb_3b",
+            "pickoffs", "wp_advances", "pb_advances", "br_runs",
+        }
+        players, total = sort_and_limit(players, sort, _BR_SORT_COLS, desc, limit, offset=offset)
+        return BaserunningLeaderboard(players=players, season=season, total=total)
+
+    @get("/baserunning/pitchers")
+    async def baserunning_pitchers(
+        self,
+        client: Client,
+        season: int = 2026,
+        min_att: int = 3,
+        sort: str = "sb_against",
+        limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
+    ) -> PitcherBaserunningLeaderboard:
+        """Pitcher baserunning-allowed stats from play-by-play."""
+        result = client.query(
+            """
+            SELECT
+                pr.pitcher_id,
+                p.name_full AS name,
+                countIf(pr.movement_reason LIKE 'r_stolen_base%') AS sb_against,
+                countIf(pr.movement_reason LIKE 'r_caught_stealing%'
+                     OR pr.movement_reason LIKE 'r_pickoff_caught_stealing%') AS cs_by,
+                countIf(pr.event = 'Wild Pitch') AS wp,
+                countIf(pr.event = 'Balk') AS balk,
+                countIf(pr.movement_reason LIKE 'r_pickoff_%') AS pickoff_attempts,
+                countIf(pr.movement_reason LIKE 'r_pickoff_%'
+                    AND pr.is_out = 1) AS pickoff_outs
+            FROM play_runners AS pr
+            LEFT JOIN players AS p FINAL ON pr.pitcher_id = p.player_id
+            WHERE pr.season = {season:UInt16}
+              AND pr.movement_reason IS NOT NULL
+              AND (pr.movement_reason LIKE 'r_stolen%'
+                OR pr.movement_reason LIKE 'r_caught%'
+                OR pr.movement_reason LIKE 'r_pickoff%'
+                OR pr.event IN ('Wild Pitch', 'Balk'))
+            GROUP BY pr.pitcher_id, p.name_full
+            HAVING sb_against + cs_by >= {min_att:UInt32}
+            """,
+            parameters={"season": season, "min_att": min_att},
+        )
+
+        players = []
+        for (
+            player_id, name, sb_against, cs_by,
+            wp, balk, pickoff_att, pickoff_outs,
+        ) in result.result_rows:
+            total_att = sb_against + cs_by
+            sb_pct_against = round(safe_div(sb_against, total_att) * 100, 1) if total_att else 0.0
+
+            players.append(PitcherBaserunningRow(
+                player_id=player_id,
+                name=name or str(player_id),
+                sb_against=sb_against, cs_by=cs_by,
+                sb_pct_against=sb_pct_against,
+                wp=wp, balk=balk,
+                pickoff_attempts=pickoff_att,
+                pickoff_outs=pickoff_outs,
+            ))
+
+        _PBR_SORT_COLS = {
+            "sb_against", "cs_by", "sb_pct_against",
+            "wp", "balk", "pickoff_attempts", "pickoff_outs",
+        }
+        players, total = sort_and_limit(players, sort, _PBR_SORT_COLS, desc, limit, offset=offset)
+        return PitcherBaserunningLeaderboard(players=players, season=season, total=total)
+
+    @get("/abs")
+    async def abs_leaderboard(
+        self,
+        client: Client,
+        season: int = 2026,
+        challenge_type: str = "batter",
+        sort: str = "challenges",
+        limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
+    ) -> AbsLeaderboard:
+        """ABS challenge leaderboard — reads from abs_challenges (full-season aggregates from Savant CSV)."""
+        valid_types = {"batter", "pitcher", "catcher", "batting-team"}
+        if challenge_type not in valid_types:
+            challenge_type = "batter"
+
+        result = client.query(
+            """
+            SELECT
+                entity_name,
+                team_abbr,
+                n_challenges,
+                n_overturns,
+                n_confirms,
+                rate_overturns,
+                n_strikeouts_flip,
+                n_walks_flip
+            FROM abs_challenges FINAL
+            WHERE season = {season:UInt16}
+              AND challenge_type = {challenge_type:String}
+            """,
+            parameters={"season": season, "challenge_type": challenge_type},
+        )
+
+        rows = []
+        for (
+            name, team, challenges, overturns, confirms,
+            overturn_pct, k_flips, bb_flips,
+        ) in result.result_rows:
+            rows.append(AbsChallengeRow(
+                name=name,
+                team=team,
+                challenges=challenges,
+                overturns=overturns,
+                confirms=confirms,
+                overturn_pct=round(overturn_pct, 3) if overturn_pct else 0,
+                k_flips=k_flips,
+                bb_flips=bb_flips,
+            ))
+
+        _ABS_SORT_COLS = {
+            "challenges", "overturns", "overturn_pct",
+            "k_flips", "bb_flips",
+        }
+        rows, total = sort_and_limit(rows, sort, _ABS_SORT_COLS, desc, limit, offset=offset)
+        return AbsLeaderboard(
+            rows=rows, season=season, challenge_type=challenge_type, total=total,
+        )
+
+    @get("/abs/events")
+    async def abs_events(
+        self,
+        client: Client,
+        name: str = "",
+        season: int = 2026,
+        role: str = "batter",
+    ) -> AbsChallengeEventList:
+        """Get individual ABS challenge events for a player."""
+        if not name:
+            return AbsChallengeEventList(
+                events=[], entity_name="", season=season, total=0,
             )
 
-        players = players[:limit]
-        return PlatoonLeaderboard(players=players, season=season, total=len(players))
+        # Map role to name column AND the challenge initiator flag
+        col_map = {
+            "batter": ("batter_name", "is_batter_challenge"),
+            "pitcher": ("pitcher_name", "is_pitcher_challenge"),
+            "catcher": ("catcher_name", "is_catcher_challenge"),
+        }
+        name_col, flag_col = col_map.get(role, ("batter_name", "is_batter_challenge"))
+
+        result = client.query(
+            f"""
+            SELECT game_pk, play_id, game_date, event_inning, outs,
+                   pre_ball_count, pre_strike_count,
+                   batter_name, pitcher_name, catcher_name,
+                   bat_team_abbr, fld_team_abbr,
+                   plate_x, plate_z, sz_top, sz_bot,
+                   original_is_strike, is_overturned,
+                   is_strike3_added, is_strike3_removed,
+                   is_ball4_added, is_ball4_removed,
+                   edge_dist
+            FROM abs_challenge_events FINAL
+            WHERE season = {{season:UInt16}}
+              AND {name_col} = {{name:String}}
+              AND {flag_col} = 1
+            ORDER BY game_date, event_inning
+            """,
+            parameters={"season": season, "name": name},
+        )
+
+        events = []
+        for (
+            game_pk, play_id, game_date, inning, outs,
+            balls, strikes,
+            batter, pitcher, catcher,
+            bat_team, fld_team,
+            px, pz, sz_top, sz_bot,
+            orig_strike, overturned,
+            k3_add, k3_rem, bb4_add, bb4_rem,
+            edge,
+        ) in result.result_rows:
+            original_call = "Strike" if orig_strike else "Ball"
+            if overturned:
+                result_str = "Ball → Strike" if orig_strike == 0 else "Strike → Ball"
+            else:
+                result_str = "Confirmed " + original_call
+
+            # Add context for K/BB flips
+            if k3_add:
+                result_str += " (K added)"
+            elif k3_rem:
+                result_str += " (K removed)"
+            elif bb4_add:
+                result_str += " (BB added)"
+            elif bb4_rem:
+                result_str += " (BB removed)"
+
+            events.append(AbsChallengeEvent(
+                game_pk=game_pk,
+                play_id=play_id,
+                game_date=game_date.isoformat(),
+                inning=inning,
+                outs=outs,
+                count=f"{balls}-{strikes}",
+                batter_name=batter,
+                pitcher_name=pitcher,
+                catcher_name=catcher,
+                bat_team=bat_team,
+                fld_team=fld_team,
+                plate_x=round(px, 3),
+                plate_z=round(pz, 3),
+                sz_top=round(sz_top, 3),
+                sz_bot=round(sz_bot, 3),
+                original_call=original_call,
+                result=result_str,
+                is_overturned=bool(overturned),
+                edge_dist=round(edge, 2),
+            ))
+
+        # Get the real total from the full-season aggregate table
+        agg_result = client.query(
+            """
+            SELECT n_challenges
+            FROM abs_challenges FINAL
+            WHERE season = {season:UInt16}
+              AND challenge_type = {ct:String}
+              AND entity_name = {name:String}
+            LIMIT 1
+            """,
+            parameters={
+                "season": season,
+                "ct": role,
+                "name": name,
+            },
+        )
+        agg_total = agg_result.result_rows[0][0] if agg_result.result_rows else len(events)
+
+        return AbsChallengeEventList(
+            events=events, entity_name=name, season=season, total=agg_total,
+        )
+
+    @get("/bat-tracking")
+    async def bat_tracking(
+        self,
+        client: Client,
+        season: int = 2026,
+        min_swings: int = 50,
+        sort: str = "avg_bat_speed",
+        limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
+    ) -> BatTrackingLeaderboard:
+        """Bat tracking leaderboard: bat speed, swing length, etc."""
+        result = client.query(
+            """
+            SELECT
+                batter,
+                p.name_full,
+                count() AS swings,
+                avg(bat_speed) AS avg_bat_speed,
+                max(bat_speed) AS max_bat_speed,
+                avg(swing_length) AS avg_swing_length,
+                countIf(bat_speed >= 75) AS fast_swings,
+                avgIf(bat_speed, barrel = 1) AS avg_barrel_bat_speed
+            FROM pitches
+            LEFT JOIN players AS p FINAL ON batter = p.player_id
+            WHERE game_year = {season:UInt16}
+              AND game_type = 'R'
+              AND bat_speed IS NOT NULL
+            GROUP BY batter, p.name_full
+            HAVING swings >= {min_swings:UInt32}
+            """,
+            parameters={"season": season, "min_swings": min_swings},
+        )
+
+        players = []
+        for (
+            batter, name, swings, avg_bat_speed, max_bat_speed,
+            avg_swing_length, fast_swings, avg_barrel_bat_speed,
+        ) in result.result_rows:
+            fast_swing_rate = round(safe_div(fast_swings, swings) * 100, 1)
+            players.append(BatTrackingRow(
+                player_id=batter,
+                name=name or str(batter),
+                swings=swings,
+                avg_bat_speed=round(avg_bat_speed, 1),
+                max_bat_speed=round(max_bat_speed, 1),
+                avg_swing_length=round(avg_swing_length, 1) if avg_swing_length is not None else None,
+                fast_swing_rate=fast_swing_rate,
+                avg_barrel_bat_speed=round(avg_barrel_bat_speed, 1) if avg_barrel_bat_speed is not None else None,
+            ))
+
+        _BT_SORT_COLS = {
+            "avg_bat_speed", "max_bat_speed", "avg_swing_length",
+            "fast_swing_rate", "avg_barrel_bat_speed", "swings",
+        }
+        players, total = sort_and_limit(players, sort, _BT_SORT_COLS, desc, limit, offset=offset)
+        return BatTrackingLeaderboard(
+            players=players, season=season, total=total,
+        )

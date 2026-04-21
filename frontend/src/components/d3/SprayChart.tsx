@@ -1,29 +1,23 @@
-import { useEffect, useRef } from "react";
-import * as d3 from "d3";
+import { useEffect, useRef, memo } from "react";
+import { select } from "d3-selection";
+import { scaleLinear } from "d3-scale";
+import { extent } from "d3-array";
+import { symbol, symbolDiamond, symbolTriangle, symbolSquare, symbolCircle } from "d3-shape";
 import type { SprayChartPoint } from "@/types/player";
+import { useContainerSize } from "@/hooks/use-container-size";
+import { EVENT_COLORS, eventColor, createTooltip, showTooltip, moveTooltip, hideTooltip } from "@/lib/chart-utils";
 
 interface Props {
   data: SprayChartPoint[];
-  width?: number;
-  height?: number;
 }
 
-const EVENT_COLORS: Record<string, string> = {
-  home_run: "#ef4444",
-  triple: "#f97316",
-  double: "#eab308",
-  single: "#22c55e",
-  field_out: "#94a3b8",
-  grounded_into_double_play: "#94a3b8",
-  force_out: "#94a3b8",
-  sac_fly: "#94a3b8",
-  fielders_choice: "#94a3b8",
-  double_play: "#94a3b8",
+// Shapes to differentiate events for colorblind users
+const EVENT_SHAPES: Record<string, string> = {
+  home_run: "diamond",
+  triple: "triangle",
+  double: "square",
+  single: "circle",
 };
-
-function eventColor(event: string): string {
-  return EVENT_COLORS[event] ?? "#64748b";
-}
 
 function eventLabel(event: string): string {
   return event
@@ -32,17 +26,46 @@ function eventLabel(event: string): string {
     .join(" ");
 }
 
-export default function SprayChart({
-  data,
-  width = 500,
-  height = 500,
-}: Props) {
+/** Draw a d3 symbol at (x, y). Returns a <path> selection. */
+function drawShape(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  g: any,
+  x: number,
+  y: number,
+  shape: string,
+  size: number,
+  fill: string,
+  opacity: number,
+) {
+  const symbolType =
+    shape === "diamond" ? symbolDiamond :
+    shape === "triangle" ? symbolTriangle :
+    shape === "square" ? symbolSquare :
+    symbolCircle;
+
+  const area = Math.PI * size * size * (shape === "circle" ? 1 : 1.6);
+  const pathData = symbol().type(symbolType).size(area)();
+
+  return g.append("path")
+    .attr("d", pathData)
+    .attr("transform", `translate(${x},${y})`)
+    .attr("fill", fill)
+    .attr("fill-opacity", opacity)
+    .attr("stroke", fill)
+    .attr("stroke-opacity", 0.6)
+    .attr("stroke-width", 0.5);
+}
+
+export default memo(function SprayChart({ data }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const { ref: containerRef, width: containerWidth } = useContainerSize(500);
+  const width = containerWidth || 500;
+  const height = width;
 
   useEffect(() => {
-    if (!svgRef.current || !data.length) return;
+    if (!svgRef.current || !data.length || !width) return;
 
-    const svg = d3.select(svgRef.current);
+    const svg = select(svgRef.current);
     svg.selectAll("*").remove();
 
     const margin = { top: 20, right: 20, bottom: 20, left: 20 };
@@ -55,11 +78,8 @@ export default function SprayChart({
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // Statcast coordinates: hc_x ~0-250, hc_y ~0-250
-    // Home plate at approximately (125, 200)
-    // y-axis is inverted (lower y = further from batter)
-    const xScale = d3.scaleLinear().domain([0, 250]).range([0, w]);
-    const yScale = d3.scaleLinear().domain([0, 250]).range([0, h]);
+    const xScale = scaleLinear().domain([0, 250]).range([0, w]);
+    const yScale = scaleLinear().domain([0, 250]).range([0, h]);
 
     const homeX = xScale(125);
     const homeY = yScale(200);
@@ -67,18 +87,10 @@ export default function SprayChart({
     // Draw field background
     const fieldGroup = g.append("g").attr("class", "field");
 
-    // Foul lines from home plate outward
-    // LF foul line: goes to upper-left
-    // RF foul line: goes to upper-right
-    // In Statcast coords, the field fans out from (125, 200)
-    // LF foul line roughly goes toward (0, 50), RF toward (250, 50)
     const lfEnd = { x: xScale(-90), y: yScale(25) };
     const rfEnd = { x: xScale(340), y: yScale(25) };
-
-    // Outfield arc
     const arcRadius = Math.hypot(rfEnd.x - homeX, rfEnd.y - homeY);
 
-    // Draw fair territory as a path
     fieldGroup
       .append("path")
       .attr(
@@ -97,26 +109,19 @@ export default function SprayChart({
     // Foul lines
     fieldGroup
       .append("line")
-      .attr("x1", homeX)
-      .attr("y1", homeY)
-      .attr("x2", lfEnd.x)
-      .attr("y2", lfEnd.y)
-      .attr("stroke", "#d4d4d8")
-      .attr("stroke-width", 1)
-      .attr("stroke-dasharray", "4,3");
+      .attr("x1", homeX).attr("y1", homeY)
+      .attr("x2", lfEnd.x).attr("y2", lfEnd.y)
+      .attr("stroke", "currentColor").attr("stroke-opacity", 0.2)
+      .attr("stroke-width", 1).attr("stroke-dasharray", "4,3");
 
     fieldGroup
       .append("line")
-      .attr("x1", homeX)
-      .attr("y1", homeY)
-      .attr("x2", rfEnd.x)
-      .attr("y2", rfEnd.y)
-      .attr("stroke", "#d4d4d8")
-      .attr("stroke-width", 1)
-      .attr("stroke-dasharray", "4,3");
+      .attr("x1", homeX).attr("y1", homeY)
+      .attr("x2", rfEnd.x).attr("y2", rfEnd.y)
+      .attr("stroke", "currentColor").attr("stroke-opacity", 0.2)
+      .attr("stroke-width", 1).attr("stroke-dasharray", "4,3");
 
     // Infield diamond
-    // Approximate base positions in Statcast coordinates
     const bases = {
       home: { x: 125, y: 200 },
       first: { x: 155, y: 175 },
@@ -132,7 +137,8 @@ export default function SprayChart({
       .append("polygon")
       .attr("points", diamondPoints)
       .attr("fill", "none")
-      .attr("stroke", "#a1a1aa")
+      .attr("stroke", "currentColor")
+      .attr("stroke-opacity", 0.3)
       .attr("stroke-width", 1.5);
 
     // Base markers
@@ -143,88 +149,65 @@ export default function SprayChart({
         .attr("y", yScale(base.y) - 4)
         .attr("width", 8)
         .attr("height", 8)
-        .attr("fill", "#fafafa")
-        .attr("stroke", "#a1a1aa")
+        .attr("fill", "var(--background, #fafafa)")
+        .attr("stroke", "currentColor")
+        .attr("stroke-opacity", 0.4)
         .attr("stroke-width", 1)
         .attr("transform", `rotate(45,${xScale(base.x)},${yScale(base.y)})`);
     });
 
     // Compute launch speed range for opacity
-    const speeds = data
-      .map((d) => d.launch_speed)
-      .filter((v): v is number => v != null);
-    const speedExtent = d3.extent(speeds) as [number, number];
-    const opacityScale = d3
-      .scaleLinear()
+    const speeds = data.map((d) => d.launch_speed).filter((v): v is number => v != null);
+    const speedExtent = extent(speeds) as [number, number];
+    const opacityScale = scaleLinear()
       .domain(speedExtent[0] != null ? speedExtent : [60, 115])
       .range([0.3, 1])
       .clamp(true);
 
     // Tooltip
-    const tooltip = d3
-      .select("body")
-      .append("div")
-      .attr("class", "spray-chart-tooltip")
-      .style("position", "absolute")
-      .style("pointer-events", "none")
-      .style("background", "hsl(0 0% 9% / 0.92)")
-      .style("color", "#fafafa")
-      .style("padding", "6px 10px")
-      .style("border-radius", "6px")
-      .style("font-size", "12px")
-      .style("line-height", "1.5")
-      .style("box-shadow", "0 2px 8px rgba(0,0,0,0.3)")
-      .style("opacity", 0)
-      .style("z-index", "9999");
+    const tooltip = createTooltip();
 
-    // Batted ball scatter plot
+    // Batted ball scatter plot with shapes
     const dots = g.append("g").attr("class", "dots");
 
-    dots
-      .selectAll("circle")
-      .data(data)
-      .join("circle")
-      .attr("cx", (d) => xScale(d.hc_x))
-      .attr("cy", (d) => yScale(d.hc_y))
-      .attr("r", 4)
-      .attr("fill", (d) => eventColor(d.events))
-      .attr("fill-opacity", (d) =>
-        d.launch_speed != null ? opacityScale(d.launch_speed) : 0.5,
-      )
-      .attr("stroke", (d) => eventColor(d.events))
-      .attr("stroke-opacity", 0.6)
-      .attr("stroke-width", 0.5)
-      .style("cursor", "pointer")
-      .on("mouseenter", function (event, d) {
-        d3.select(this).attr("r", 7).attr("stroke-width", 2);
-        tooltip
-          .html(
+    data.forEach((d) => {
+      const shape = EVENT_SHAPES[d.events] ?? "circle";
+      const color = eventColor(d.events);
+      const opacity = d.launch_speed != null ? opacityScale(d.launch_speed) : 0.5;
+      const cx = xScale(d.hc_x);
+      const cy = yScale(d.hc_y);
+
+      const el = drawShape(dots, cx, cy, shape, 4, color, opacity);
+
+      el.style("cursor", "pointer");
+
+      el.on("mouseenter", (_event: MouseEvent) => {
+          el.attr("stroke-width", 2);
+          showTooltip(
+            tooltip,
             `<strong>${eventLabel(d.events)}</strong><br/>` +
               `Exit Velo: ${d.launch_speed != null ? `${d.launch_speed.toFixed(1)} mph` : "N/A"}<br/>` +
               `Launch Angle: ${d.launch_angle != null ? `${d.launch_angle.toFixed(1)}deg` : "N/A"}` +
               (d.bb_type ? `<br/>Type: ${eventLabel(d.bb_type)}` : ""),
-          )
-          .style("opacity", 1)
-          .style("left", `${event.pageX + 12}px`)
-          .style("top", `${event.pageY - 10}px`);
-      })
-      .on("mousemove", function (event) {
-        tooltip
-          .style("left", `${event.pageX + 12}px`)
-          .style("top", `${event.pageY - 10}px`);
-      })
-      .on("mouseleave", function () {
-        d3.select(this).attr("r", 4).attr("stroke-width", 0.5);
-        tooltip.style("opacity", 0);
-      });
+            _event,
+          );
+        })
+        .on("mousemove", (_event: MouseEvent) => {
+          moveTooltip(tooltip, _event);
+        })
+        .on("mouseleave", () => {
+          el.attr("stroke-width", 0.5);
+          hideTooltip(tooltip);
+        });
+    });
 
     // Legend
     const legendEntries = [
-      { label: "Home Run", color: EVENT_COLORS.home_run },
-      { label: "Triple", color: EVENT_COLORS.triple },
-      { label: "Double", color: EVENT_COLORS.double },
-      { label: "Single", color: EVENT_COLORS.single },
-      { label: "Out", color: EVENT_COLORS.field_out },
+      { label: "Home Run", color: EVENT_COLORS.home_run, shape: "diamond" },
+      { label: "Triple", color: EVENT_COLORS.triple, shape: "triangle" },
+      { label: "Double", color: EVENT_COLORS.double, shape: "square" },
+      { label: "Single", color: EVENT_COLORS.single, shape: "circle" },
+      { label: "Out", color: EVENT_COLORS.field_out, shape: "circle" },
     ];
 
     const legend = g
@@ -236,12 +219,7 @@ export default function SprayChart({
       const row = legend
         .append("g")
         .attr("transform", `translate(0, ${i * 18})`);
-      row
-        .append("circle")
-        .attr("cx", 0)
-        .attr("cy", 0)
-        .attr("r", 5)
-        .attr("fill", entry.color);
+      drawShape(row, 0, 0, entry.shape, 5, entry.color, 1);
       row
         .append("text")
         .attr("x", 12)
@@ -264,5 +242,13 @@ export default function SprayChart({
     );
   }
 
-  return <svg ref={svgRef} />;
-}
+  return (
+    <div ref={containerRef} className="w-full max-w-[500px]">
+      <svg
+        ref={svgRef}
+        role="img"
+        aria-label={`Spray chart showing ${data.length} batted balls plotted on a baseball field`}
+      />
+    </div>
+  );
+});

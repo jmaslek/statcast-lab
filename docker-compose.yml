@@ -1,11 +1,11 @@
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:25.3
     ports:
       - "8123:8123"
       - "9000:9000"
     volumes:
-      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_data_v2:/var/lib/clickhouse
     environment:
       CLICKHOUSE_DB: mlb
       CLICKHOUSE_USER: mlb
@@ -17,4 +17,4 @@ services:
         hard: 262144
 
 volumes:
-  clickhouse_data:
+  clickhouse_data_v2:

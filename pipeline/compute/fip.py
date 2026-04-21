@@ -1,8 +1,7 @@
-"""FIP (Fielding Independent Pitching) computation.
+"""FIP from our own Statcast data.
 
-Computes FIP entirely from our own Statcast data — no external constants.
-Uses RA/9 (run average) instead of ERA since we cannot distinguish
-earned vs unearned runs from pitch-level data.
+Uses RA/9 instead of ERA — we can't tell earned from unearned runs at the
+pitch level, so the 'FIP constant' calibrates against all runs allowed.
 """
 
 from loguru import logger
@@ -26,16 +25,8 @@ ORDER BY (player_id, season)
 """
 
 
-def _compute_league_fip_constant(
-    client: Client,
-    season: int,
-) -> tuple[float, float]:
-    """Compute the FIP constant and league RA/9 for a season.
-
-    FIP_constant = lg_RA/9 - ((13*lg_HR + 3*(lg_BB+lg_HBP) - 2*lg_K) / lg_IP)
-
-    Returns (fip_constant, league_ra9).
-    """
+def _compute_league_fip_constant(client: Client, season: int) -> tuple[float, float]:
+    # FIP_constant = lg_RA/9 - ((13*HR + 3*(BB+HBP) - 2*K) / lg_IP)
     outs_expr = outs_recorded_sql()
 
     result = client.query(
@@ -60,16 +51,13 @@ def _compute_league_fip_constant(
     k, bb, hbp, hr, outs, runs = result.result_rows[0]
 
     lg_ip = outs / 3.0
-    lg_ra9 = runs / lg_ip * 9.0 if lg_ip > 0 else 0.0
-    lg_fip_component = (13 * hr + 3 * (bb + hbp) - 2 * k) / lg_ip if lg_ip > 0 else 0.0
-    fip_constant = lg_ra9 - lg_fip_component
-
+    if lg_ip <= 0:
+        return 0.0, 0.0
+    lg_ra9 = runs / lg_ip * 9.0
+    fip_constant = lg_ra9 - (13 * hr + 3 * (bb + hbp) - 2 * k) / lg_ip
     logger.info(
-        "Season %d: lg_RA/9=%.3f, lg_IP=%.1f, FIP_constant=%.3f",
-        season,
-        lg_ra9,
-        lg_ip,
-        fip_constant,
+        "{}: lg_RA/9={:.3f}, lg_IP={:.1f}, FIP_const={:.3f}",
+        season, lg_ra9, lg_ip, fip_constant,
     )
     return fip_constant, lg_ra9
 
@@ -79,14 +67,9 @@ def compute_fip_for_season(
     season: int,
     min_ip: float = 10.0,
 ) -> int:
-    """Compute FIP for all qualifying pitchers in a season.
-
-    Returns the number of pitchers inserted.
-    """
-    logger.info("Computing FIP for %d (min_ip=%.1f)", season, min_ip)
+    logger.info("FIP for {} (min_ip={:.1f})", season, min_ip)
 
     client.command(PLAYER_FIP_DDL)
-
     fip_constant, lg_ra9 = _compute_league_fip_constant(client, season)
 
     outs_expr = outs_recorded_sql()
@@ -113,45 +96,23 @@ def compute_fip_for_season(
         parameters={"season": season, "min_outs": min_outs},
     )
 
-    rows_to_insert = []
-    for row in result.result_rows:
-        pitcher, k, bb, hbp, hr, outs = row
+    rows = []
+    for pitcher, k, bb, hbp, hr, outs in result.result_rows:
         ip = outs / 3.0
-        fip = ((13 * hr + 3 * (bb + hbp) - 2 * k) / ip) + fip_constant
+        fip = (13 * hr + 3 * (bb + hbp) - 2 * k) / ip + fip_constant
+        rows.append([pitcher, season, ip, k, bb, hbp, hr, fip, fip_constant, lg_ra9])
 
-        rows_to_insert.append(
-            [
-                pitcher,
-                season,
-                ip,
-                k,
-                bb,
-                hbp,
-                hr,
-                fip,
-                fip_constant,
-                lg_ra9,
-            ]
-        )
-
-    if rows_to_insert:
+    if rows:
         delete_season(client, "player_fip", season)
         client.insert(
             "player_fip",
-            rows_to_insert,
+            rows,
             column_names=[
-                "player_id",
-                "season",
-                "ip",
-                "k",
-                "bb",
-                "hbp",
-                "hr",
-                "fip",
-                "fip_constant",
-                "ra9",
+                "player_id", "season", "ip",
+                "k", "bb", "hbp", "hr",
+                "fip", "fip_constant", "ra9",
             ],
         )
-        logger.info("Inserted FIP for %d pitchers in %d", len(rows_to_insert), season)
+        logger.info("Wrote FIP for {} pitchers in {}", len(rows), season)
 
-    return len(rows_to_insert)
+    return len(rows)

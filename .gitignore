@@ -41,6 +41,9 @@ htmlcov/
 
 # Claude Code
 .claude/
-
-
+.impeccable.md
+.playwright-mcp
+screenshots/
+AGENTS.md
+CLAUDE.md
 */plans

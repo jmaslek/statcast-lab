@@ -22,3 +22,23 @@ class PitchingLeaderboard(BaseModel):
     players: list[PitchingLeaderRow]
     season: int
     total: int
+
+
+class PitchUsageByCountCell(BaseModel):
+    pitch_type: str
+    pitch_name: str | None
+    count_state: str  # e.g. "0-0", "1-2"
+    usage_pct: float
+    num_pitches: int
+    avg_velo: float | None
+    whiff_pct: float | None
+
+
+class PitchUsageByCountData(BaseModel):
+    pitcher_id: int
+    name: str
+    season: int
+    pitch_types: list[str]  # ordered by overall usage
+    pitch_names: dict[str, str]
+    counts: list[str]  # ordered 0-0, 0-1, 0-2, 1-0, etc.
+    cells: list[PitchUsageByCountCell]

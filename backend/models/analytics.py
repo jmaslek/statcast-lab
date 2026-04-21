@@ -45,3 +45,18 @@ class ParkFactorRow(BaseModel):
 class ParkFactorsData(BaseModel):
     season: int
     factors: list[ParkFactorRow]
+
+
+class RECountEntry(BaseModel):
+    base_out_state: int
+    outs: int
+    runners_on: str
+    balls: int
+    strikes: int
+    expected_runs: float
+    occurrences: int
+
+
+class RECountMatrixData(BaseModel):
+    season: int
+    entries: list[RECountEntry]

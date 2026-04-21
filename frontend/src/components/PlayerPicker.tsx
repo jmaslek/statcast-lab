@@ -119,10 +119,10 @@ export default function PlayerPicker({
               </span>
               <button
                 type="button"
-                className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                className="ml-1 rounded-full p-1.5 hover:bg-muted min-w-[28px] min-h-[28px] flex items-center justify-center"
                 onClick={() => handleRemove(player.player_id)}
               >
-                <X className="size-3" />
+                <X className="size-3.5" />
                 <span className="sr-only">Remove {player.name}</span>
               </button>
             </Badge>

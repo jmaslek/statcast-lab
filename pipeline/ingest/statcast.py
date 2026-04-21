@@ -1,4 +1,4 @@
-"""Statcast data ingestion: pybaseball -> Polars -> ClickHouse."""
+"""pybaseball.statcast -> Polars -> ClickHouse."""
 
 from datetime import date, timedelta
 
@@ -7,7 +7,8 @@ import polars as pl
 import pybaseball
 from loguru import logger
 
-# Column names matching the pitches table DDL in pipeline/schema.py
+# Kept in sync with the `pitches` DDL in pipeline/schema.py. Fields that
+# pybaseball doesn't return for a given date range are silently dropped.
 STATCAST_COLUMNS: list[str] = [
     # Game context
     "game_pk",
@@ -123,39 +124,21 @@ STATCAST_COLUMNS: list[str] = [
 
 
 def transform_statcast_df(pdf: pd.DataFrame) -> pl.DataFrame:
-    """Transform a pandas DataFrame from pybaseball into a Polars DataFrame.
-
-    Keeps only columns present in both STATCAST_COLUMNS and the input DataFrame,
-    converts to Polars, and ensures game_date is a Date type.
-    """
-    # Keep only columns that exist in both the data and our schema
     cols_to_keep = [c for c in STATCAST_COLUMNS if c in pdf.columns]
     pdf = pdf[cols_to_keep].copy()
-
-    # Ensure game_date is datetime before conversion
     if "game_date" in pdf.columns:
         pdf["game_date"] = pd.to_datetime(pdf["game_date"])
 
     df = pl.from_pandas(pdf)
-
-    # Ensure game_date is Date type (not Datetime)
-    if "game_date" in df.columns:
-        if df["game_date"].dtype != pl.Date:
-            df = df.with_columns(pl.col("game_date").cast(pl.Date))
-
+    if "game_date" in df.columns and df["game_date"].dtype != pl.Date:
+        df = df.with_columns(pl.col("game_date").cast(pl.Date))
     return df
 
 
 def insert_pitches(client, df: pl.DataFrame) -> int:
-    """Insert a Polars DataFrame of pitches into ClickHouse.
-
-    Returns the number of rows inserted.
-    """
     if df.is_empty():
         return 0
-
-    pdf = df.to_pandas()
-    client.insert_df("pitches", pdf)
+    client.insert_df("pitches", df.to_pandas())
     return len(df)
 
 
@@ -165,44 +148,39 @@ def fetch_and_load(
     end: date,
     chunk_days: int = 7,
 ) -> int:
-    """Fetch Statcast data in weekly chunks and load into ClickHouse.
+    """Fetch Statcast in `chunk_days`-wide windows, insert each chunk independently.
 
-    Args:
-        client: ClickHouse client instance.
-        start: Start date (inclusive).
-        end: End date (inclusive).
-        chunk_days: Number of days per chunk.
-
-    Returns:
-        Total number of rows loaded.
+    A chunk that fails is logged and skipped — the function carries on so a
+    single bad week doesn't abort an entire backfill. The count of failed
+    chunks is logged at the end; callers that need strictness should check
+    logs or re-run over the failed range.
     """
     total_rows = 0
+    failed = 0
     current = start
 
     while current <= end:
         chunk_end = min(current + timedelta(days=chunk_days - 1), end)
         start_str = current.strftime("%Y-%m-%d")
         end_str = chunk_end.strftime("%Y-%m-%d")
-
-        logger.info("Fetching statcast data: %s to %s", start_str, end_str)
+        logger.info("Fetching {} to {}", start_str, end_str)
 
         try:
             pdf = pybaseball.statcast(start_dt=start_str, end_dt=end_str)
-
             if pdf is None or pdf.empty:
-                logger.info("No data returned for %s to %s", start_str, end_str)
-                current = chunk_end + timedelta(days=1)
-                continue
-
-            df = transform_statcast_df(pdf)
-            insert_pitches(client, df)
-            total_rows += len(df)
-            logger.info("Inserted %d rows for %s to %s", len(df), start_str, end_str)
-
+                logger.info("No data for {} to {}", start_str, end_str)
+            else:
+                df = transform_statcast_df(pdf)
+                insert_pitches(client, df)
+                total_rows += len(df)
+                logger.info("Inserted {} rows for {} to {}", len(df), start_str, end_str)
         except Exception:
-            logger.exception("Error processing chunk %s to %s", start_str, end_str)
+            failed += 1
+            logger.exception("Chunk {} to {} failed", start_str, end_str)
 
         current = chunk_end + timedelta(days=1)
 
-    logger.info("Total rows loaded: %d", total_rows)
+    if failed:
+        logger.warning("{} chunk(s) failed — re-run those ranges to close gaps", failed)
+    logger.info("Total rows loaded: {}", total_rows)
     return total_rows

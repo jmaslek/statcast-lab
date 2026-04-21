@@ -1,33 +1,40 @@
 import { useEffect, useRef } from "react";
-import * as d3 from "d3";
+import { select } from "d3-selection";
+import { scaleLinear, scaleSequential } from "d3-scale";
+import { max } from "d3-array";
+import { axisBottom, axisLeft } from "d3-axis";
+import { format } from "d3-format";
+import { interpolateYlOrRd } from "d3-scale-chromatic";
 import type { ZonePoint } from "@/types/player";
+import { useContainerSize } from "@/hooks/use-container-size";
+import { getChartTheme } from "@/lib/chart-utils";
 
 interface Props {
   data: ZonePoint[];
   metric?: "whiff" | "called_strike" | "hard_hit" | "usage";
-  width?: number;
-  height?: number;
 }
 
 const METRIC_DESCRIPTIONS: Record<string, string[]> = {
   whiff: ["swinging_strike", "swinging_strike_blocked", "foul_tip"],
   called_strike: ["called_strike"],
-  hard_hit: [], // handled separately
-  usage: [], // all pitches
+  hard_hit: [],
+  usage: [],
 };
 
 export default function StrikeZoneHeatmap({
   data,
   metric = "usage",
-  width = 400,
-  height = 480,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const { ref: containerRef, width: containerWidth } = useContainerSize(400);
+  const width = containerWidth || 400;
+  const height = width * 1.2;
 
   useEffect(() => {
-    if (!svgRef.current || !data.length) return;
+    if (!svgRef.current || !data.length || !width) return;
 
-    const svg = d3.select(svgRef.current);
+    const theme = getChartTheme();
+    const svg = select(svgRef.current);
     svg.selectAll("*").remove();
 
     const margin = { top: 30, right: 30, bottom: 50, left: 50 };
@@ -40,12 +47,11 @@ export default function StrikeZoneHeatmap({
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // Statcast: plate_x ~ -2 to 2, plate_z ~ 0 to 5
     const xDomain = [-2, 2] as const;
     const yDomain = [0, 5] as const;
 
-    const xScale = d3.scaleLinear().domain(xDomain).range([0, w]);
-    const yScale = d3.scaleLinear().domain(yDomain).range([h, 0]); // inverted for SVG
+    const xScale = scaleLinear().domain(xDomain).range([0, w]);
+    const yScale = scaleLinear().domain(yDomain).range([h, 0]);
 
     // Grid binning
     const numBinsX = 20;
@@ -53,7 +59,6 @@ export default function StrikeZoneHeatmap({
     const binWidth = (xDomain[1] - xDomain[0]) / numBinsX;
     const binHeight = (yDomain[1] - yDomain[0]) / numBinsY;
 
-    // Create bins and compute metric
     const bins: { x: number; y: number; total: number; metric: number }[] = [];
 
     for (let i = 0; i < numBinsX; i++) {
@@ -94,7 +99,6 @@ export default function StrikeZoneHeatmap({
           metricValue =
             inBin.length > 0 ? called.length / inBin.length : 0;
         } else {
-          // hard_hit - not computable from ZonePoint alone, use density as fallback
           metricValue = inBin.length;
         }
 
@@ -107,9 +111,8 @@ export default function StrikeZoneHeatmap({
       }
     }
 
-    const maxMetric = d3.max(bins, (b) => b.metric) ?? 1;
-    const colorScale = d3
-      .scaleSequential(d3.interpolateYlOrRd)
+    const maxMetric = max(bins, (b) => b.metric) ?? 1;
+    const colorScale = scaleSequential(interpolateYlOrRd)
       .domain([0, maxMetric]);
 
     // Draw heatmap bins
@@ -126,7 +129,7 @@ export default function StrikeZoneHeatmap({
       .attr("fill-opacity", 0.75)
       .attr("rx", 1);
 
-    // Strike zone rectangle (rule book: plate_x -0.83 to 0.83, plate_z 1.5 to 3.5)
+    // Strike zone rectangle - using currentColor for theme awareness
     const zoneLeft = xScale(-0.83);
     const zoneRight = xScale(0.83);
     const zoneTop = yScale(3.5);
@@ -138,36 +141,34 @@ export default function StrikeZoneHeatmap({
       .attr("width", zoneRight - zoneLeft)
       .attr("height", zoneBottom - zoneTop)
       .attr("fill", "none")
-      .attr("stroke", "#18181b")
+      .attr("stroke", "currentColor")
       .attr("stroke-width", 2.5)
       .attr("stroke-opacity", 0.9);
 
-    // Inner grid lines for the 3x3 zone breakdown
+    // Inner grid lines
     const zoneW = (0.83 - -0.83) / 3;
     const zoneH = (3.5 - 1.5) / 3;
 
     for (let i = 1; i < 3; i++) {
-      // Vertical
       g.append("line")
         .attr("x1", xScale(-0.83 + i * zoneW))
         .attr("y1", zoneTop)
         .attr("x2", xScale(-0.83 + i * zoneW))
         .attr("y2", zoneBottom)
-        .attr("stroke", "#18181b")
+        .attr("stroke", "currentColor")
         .attr("stroke-width", 1)
         .attr("stroke-opacity", 0.4);
-      // Horizontal
       g.append("line")
         .attr("x1", zoneLeft)
         .attr("y1", yScale(1.5 + i * zoneH))
         .attr("x2", zoneRight)
         .attr("y2", yScale(1.5 + i * zoneH))
-        .attr("stroke", "#18181b")
+        .attr("stroke", "currentColor")
         .attr("stroke-width", 1)
         .attr("stroke-opacity", 0.4);
     }
 
-    // Home plate shape at bottom
+    // Home plate shape
     const plateCenter = xScale(0);
     const plateY = yScale(0.2);
     const plateHalfW = (xScale(0.83) - xScale(-0.83)) / 2;
@@ -185,13 +186,13 @@ export default function StrikeZoneHeatmap({
 
     g.append("path")
       .attr("d", platePath + " Z")
-      .attr("fill", "#e4e4e7")
-      .attr("stroke", "#71717a")
+      .attr("fill", theme.border)
+      .attr("stroke", theme.mutedForeground)
       .attr("stroke-width", 1.5);
 
     // Axes
-    const xAxis = d3.axisBottom(xScale).ticks(5).tickFormat(d3.format(".1f"));
-    const yAxis = d3.axisLeft(yScale).ticks(6).tickFormat(d3.format(".1f"));
+    const xAxis = axisBottom(xScale).ticks(5).tickFormat(format(".1f"));
+    const yAxis = axisLeft(yScale).ticks(6).tickFormat(format(".1f"));
 
     g.append("g")
       .attr("transform", `translate(0,${h})`)
@@ -206,23 +207,17 @@ export default function StrikeZoneHeatmap({
 
     // Axis labels
     g.append("text")
-      .attr("x", w / 2)
-      .attr("y", h + 40)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "12px")
-      .attr("fill", "currentColor")
-      .text("Horizontal Position (ft)");
+      .attr("x", w / 2).attr("y", h + 40)
+      .attr("text-anchor", "middle").attr("font-size", "12px")
+      .attr("fill", "currentColor").text("Horizontal Position (ft)");
 
     g.append("text")
-      .attr("x", -h / 2)
-      .attr("y", -38)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "12px")
-      .attr("fill", "currentColor")
-      .attr("transform", "rotate(-90)")
+      .attr("x", -h / 2).attr("y", -38)
+      .attr("text-anchor", "middle").attr("font-size", "12px")
+      .attr("fill", "currentColor").attr("transform", "rotate(-90)")
       .text("Height (ft)");
 
-    // Title with metric
+    // Title
     const metricNames: Record<string, string> = {
       usage: "Pitch Location Density",
       whiff: "Whiff Rate by Zone",
@@ -231,12 +226,9 @@ export default function StrikeZoneHeatmap({
     };
 
     g.append("text")
-      .attr("x", w / 2)
-      .attr("y", -10)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "13px")
-      .attr("font-weight", "600")
-      .attr("fill", "currentColor")
+      .attr("x", w / 2).attr("y", -10)
+      .attr("text-anchor", "middle").attr("font-size", "13px")
+      .attr("font-weight", "600").attr("fill", "currentColor")
       .text(metricNames[metric] ?? "Strike Zone");
   }, [data, metric, width, height]);
 
@@ -248,5 +240,13 @@ export default function StrikeZoneHeatmap({
     );
   }
 
-  return <svg ref={svgRef} />;
+  return (
+    <div ref={containerRef} className="w-full max-w-[400px]">
+      <svg
+        ref={svgRef}
+        role="img"
+        aria-label={`Strike zone heatmap showing ${metric} for ${data.length} pitches`}
+      />
+    </div>
+  );
 }

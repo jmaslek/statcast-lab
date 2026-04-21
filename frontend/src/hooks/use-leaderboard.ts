@@ -1,13 +1,29 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import type { HittingLeaderboard, PitchingLeaderboard, FramingLeaderboard, WarLeaderboard, ArsenalData, ExpectedStatsLeaderboard, BattedBallLeaderboard, PlatoonLeaderboard } from "@/types/stats";
+import type { HittingLeaderboard, PitchingLeaderboard, FramingLeaderboard, WarLeaderboard, ArsenalData, ExpectedStatsLeaderboard, BattedBallLeaderboard, PlatoonLeaderboard, BaserunningLeaderboard, PitcherBaserunningLeaderboard, AbsLeaderboard, AbsChallengeEventList, BatTrackingLeaderboard } from "@/types/stats";
 
-export function useHittingLeaderboard(params: {
+/** Common pagination params shared by all leaderboard hooks */
+interface PaginationParams {
+  sort: string;
+  desc?: boolean;
+  limit: number;
+  offset?: number;
+  enabled?: boolean;
+}
+
+function paginationQuery(params: PaginationParams): Record<string, string> {
+  return {
+    sort: params.sort,
+    desc: String(params.desc ?? true),
+    limit: String(params.limit),
+    ...(params.offset ? { offset: String(params.offset) } : {}),
+  };
+}
+
+export function useHittingLeaderboard(params: PaginationParams & {
   season: number;
   minPa: number;
   team?: string;
-  sort: string;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["hitting-leaderboard", params],
@@ -15,62 +31,58 @@ export function useHittingLeaderboard(params: {
       fetchApi<HittingLeaderboard>("/hitting/leaderboard", {
         season: String(params.season),
         min_pa: String(params.minPa),
-        sort: params.sort,
-        limit: String(params.limit),
         ...(params.team ? { team: params.team } : {}),
+        ...paginationQuery(params),
       }),
+    enabled: params.enabled ?? true,
   });
 }
 
-export function useFramingLeaderboard(params: {
+export function useFramingLeaderboard(params: PaginationParams & {
   season: number;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["framing-leaderboard", params],
     queryFn: () =>
       fetchApi<FramingLeaderboard>("/framing/leaderboard", {
         season: String(params.season),
-        limit: String(params.limit),
+        ...paginationQuery({ ...params, sort: params.sort || "framing_runs" }),
       }),
+    enabled: params.enabled ?? true,
   });
 }
 
-export function useWarLeaderboard(params: {
+export function useWarLeaderboard(params: PaginationParams & {
   season: number;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["war-leaderboard", params],
     queryFn: () =>
       fetchApi<WarLeaderboard>("/war/leaderboard", {
         season: String(params.season),
-        limit: String(params.limit),
+        ...paginationQuery({ ...params, sort: params.sort || "war" }),
       }),
+    enabled: params.enabled ?? true,
   });
 }
 
-export function useArsenalLeaderboard(params: {
+export function useArsenalLeaderboard(params: PaginationParams & {
   season: number;
-  sort: string;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["arsenal-leaderboard", params],
     queryFn: () =>
       fetchApi<ArsenalData>("/pitching/arsenal", {
         season: String(params.season),
-        sort: params.sort,
-        limit: String(params.limit),
+        ...paginationQuery(params),
       }),
+    enabled: params.enabled ?? true,
   });
 }
 
-export function useExpectedStats(params: {
+export function useExpectedStats(params: PaginationParams & {
   season: number;
   minPa: number;
-  sort: string;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["expected-stats", params],
@@ -78,17 +90,15 @@ export function useExpectedStats(params: {
       fetchApi<ExpectedStatsLeaderboard>("/hitting/expected-stats", {
         season: String(params.season),
         min_pa: String(params.minPa),
-        sort: params.sort,
-        limit: String(params.limit),
+        ...paginationQuery(params),
       }),
+    enabled: params.enabled ?? true,
   });
 }
 
-export function useBattedBallLeaderboard(params: {
+export function useBattedBallLeaderboard(params: PaginationParams & {
   season: number;
   minBbe: number;
-  sort: string;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["batted-ball-leaderboard", params],
@@ -96,17 +106,15 @@ export function useBattedBallLeaderboard(params: {
       fetchApi<BattedBallLeaderboard>("/hitting/batted-ball", {
         season: String(params.season),
         min_bbe: String(params.minBbe),
-        sort: params.sort,
-        limit: String(params.limit),
+        ...paginationQuery(params),
       }),
+    enabled: params.enabled ?? true,
   });
 }
 
-export function usePlatoonLeaderboard(params: {
+export function usePlatoonLeaderboard(params: PaginationParams & {
   season: number;
   minPa: number;
-  sort: string;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["platoon-leaderboard", params],
@@ -114,18 +122,98 @@ export function usePlatoonLeaderboard(params: {
       fetchApi<PlatoonLeaderboard>("/hitting/platoon", {
         season: String(params.season),
         min_pa: String(params.minPa),
-        sort: params.sort,
-        limit: String(params.limit),
+        ...paginationQuery(params),
       }),
+    enabled: params.enabled ?? true,
   });
 }
 
-export function usePitchingLeaderboard(params: {
+export function useBaserunningLeaderboard(params: PaginationParams & {
+  season: number;
+  minAtt: number;
+}) {
+  return useQuery({
+    queryKey: ["baserunning-leaderboard", params],
+    queryFn: () =>
+      fetchApi<BaserunningLeaderboard>("/hitting/baserunning", {
+        season: String(params.season),
+        min_att: String(params.minAtt),
+        ...paginationQuery(params),
+      }),
+    enabled: params.enabled ?? true,
+  });
+}
+
+export function usePitcherBaserunningLeaderboard(params: PaginationParams & {
+  season: number;
+  minAtt: number;
+}) {
+  return useQuery({
+    queryKey: ["pitcher-baserunning-leaderboard", params],
+    queryFn: () =>
+      fetchApi<PitcherBaserunningLeaderboard>("/hitting/baserunning/pitchers", {
+        season: String(params.season),
+        min_att: String(params.minAtt),
+        ...paginationQuery(params),
+      }),
+    enabled: params.enabled ?? true,
+  });
+}
+
+export function useAbsLeaderboard(params: PaginationParams & {
+  season: number;
+  challengeType: string;
+}) {
+  return useQuery({
+    queryKey: ["abs-leaderboard", params],
+    queryFn: () =>
+      fetchApi<AbsLeaderboard>("/hitting/abs", {
+        season: String(params.season),
+        challenge_type: params.challengeType,
+        ...paginationQuery(params),
+      }),
+    enabled: params.enabled ?? true,
+  });
+}
+
+export function useAbsEvents(params: {
+  name: string;
+  season: number;
+  role: string;
+  enabled?: boolean;
+}) {
+  return useQuery({
+    queryKey: ["abs-events", params],
+    queryFn: () =>
+      fetchApi<AbsChallengeEventList>("/hitting/abs/events", {
+        name: params.name,
+        season: String(params.season),
+        role: params.role,
+      }),
+    enabled: (params.enabled ?? true) && params.name !== "",
+  });
+}
+
+export function useBatTrackingLeaderboard(params: PaginationParams & {
+  season: number;
+  minSwings: number;
+}) {
+  return useQuery({
+    queryKey: ["bat-tracking-leaderboard", params],
+    queryFn: () =>
+      fetchApi<BatTrackingLeaderboard>("/hitting/bat-tracking", {
+        season: String(params.season),
+        min_swings: String(params.minSwings),
+        ...paginationQuery(params),
+      }),
+    enabled: params.enabled ?? true,
+  });
+}
+
+export function usePitchingLeaderboard(params: PaginationParams & {
   season: number;
   minPitches: number;
   team?: string;
-  sort: string;
-  limit: number;
 }) {
   return useQuery({
     queryKey: ["pitching-leaderboard", params],
@@ -133,9 +221,9 @@ export function usePitchingLeaderboard(params: {
       fetchApi<PitchingLeaderboard>("/pitching/leaderboard", {
         season: String(params.season),
         min_pitches: String(params.minPitches),
-        sort: params.sort,
-        limit: String(params.limit),
         ...(params.team ? { team: params.team } : {}),
+        ...paginationQuery(params),
       }),
+    enabled: params.enabled ?? true,
   });
 }

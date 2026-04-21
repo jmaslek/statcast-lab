@@ -1,35 +1,20 @@
 import { useEffect, useRef } from "react";
-import * as d3 from "d3";
+import { select } from "d3-selection";
+import { scaleLinear } from "d3-scale";
+import { extent } from "d3-array";
 import type {
   MovementPoint,
   LeagueAverageMovement,
   PitchTypeSummary,
 } from "@/types/player";
+import { useContainerSize } from "@/hooks/use-container-size";
+import { pitchColor, createTooltip, showTooltip, moveTooltip, hideTooltip } from "@/lib/chart-utils";
 
 interface Props {
   data: MovementPoint[];
   leagueAverages?: LeagueAverageMovement[];
   pitchSummary?: PitchTypeSummary[];
   pThrows?: string;
-  width?: number;
-  height?: number;
-}
-
-const PITCH_COLORS: Record<string, string> = {
-  FF: "#ef4444", // Four-seam Fastball - red
-  SI: "#f97316", // Sinker - orange
-  SL: "#eab308", // Slider - yellow
-  CU: "#3b82f6", // Curveball - blue
-  CH: "#22c55e", // Changeup - green
-  FC: "#a855f7", // Cutter - purple
-  FS: "#14b8a6", // Splitter - teal
-  KC: "#6366f1", // Knuckle Curve - indigo
-  ST: "#ec4899", // Sweeper - pink
-  SV: "#d946ef", // Slurve - fuchsia
-};
-
-function pitchColor(pitchType: string): string {
-  return PITCH_COLORS[pitchType] ?? "#94a3b8";
 }
 
 export default function PitchMovementPlot({
@@ -37,15 +22,16 @@ export default function PitchMovementPlot({
   leagueAverages,
   pitchSummary,
   pThrows,
-  width = 520,
-  height = 520,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const { ref: containerRef, width: containerWidth } = useContainerSize(520);
+  const width = containerWidth || 520;
+  const height = width;
 
   useEffect(() => {
-    if (!svgRef.current || !data.length) return;
+    if (!svgRef.current || !data.length || !width) return;
 
-    const svg = d3.select(svgRef.current);
+    const svg = select(svgRef.current);
     svg.selectAll("*").remove();
 
     const margin = { top: 40, right: 40, bottom: 40, left: 40 };
@@ -60,7 +46,6 @@ export default function PitchMovementPlot({
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // Determine scale: fixed at 24" max radius
     const maxRadius = 24;
     const pxPerInch = Math.min(w, h) / 2 / maxRadius;
 
@@ -87,90 +72,58 @@ export default function PitchMovementPlot({
         .attr("stroke-opacity", 0.5);
     });
 
-    // Polar grid: concentric circles
+    // Polar grid
     const ringRadii = [6, 12, 18, 24];
     ringRadii.forEach((r) => {
       g.append("circle")
-        .attr("cx", cx)
-        .attr("cy", cy)
-        .attr("r", r * pxPerInch)
-        .attr("fill", "none")
-        .attr("stroke", "currentColor")
-        .attr("stroke-opacity", 0.12)
-        .attr("stroke-width", 1);
+        .attr("cx", cx).attr("cy", cy).attr("r", r * pxPerInch)
+        .attr("fill", "none").attr("stroke", "currentColor")
+        .attr("stroke-opacity", 0.12).attr("stroke-width", 1);
 
-      // Label on right side of each ring
       g.append("text")
-        .attr("x", cx + r * pxPerInch + 3)
-        .attr("y", cy - 3)
-        .attr("font-size", "9px")
-        .attr("fill", "currentColor")
-        .attr("fill-opacity", 0.4)
-        .text(`${r}"`);
+        .attr("x", cx + r * pxPerInch + 3).attr("y", cy - 3)
+        .attr("font-size", "9px").attr("fill", "currentColor")
+        .attr("fill-opacity", 0.4).text(`${r}"`);
     });
 
-    // Crosshair lines through origin
+    // Crosshair lines
     g.append("line")
-      .attr("x1", cx)
-      .attr("y1", 0)
-      .attr("x2", cx)
-      .attr("y2", h)
-      .attr("stroke", "currentColor")
-      .attr("stroke-opacity", 0.2)
-      .attr("stroke-width", 1);
-
+      .attr("x1", cx).attr("y1", 0).attr("x2", cx).attr("y2", h)
+      .attr("stroke", "currentColor").attr("stroke-opacity", 0.2);
     g.append("line")
-      .attr("x1", 0)
-      .attr("y1", cy)
-      .attr("x2", w)
-      .attr("y2", cy)
-      .attr("stroke", "currentColor")
-      .attr("stroke-opacity", 0.2)
-      .attr("stroke-width", 1);
+      .attr("x1", 0).attr("y1", cy).attr("x2", w).attr("y2", cy)
+      .attr("stroke", "currentColor").attr("stroke-opacity", 0.2);
 
     // Directional labels
     g.append("text")
-      .attr("x", cx)
-      .attr("y", 8)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "10px")
-      .attr("font-weight", "600")
-      .attr("fill", "currentColor")
-      .attr("fill-opacity", 0.5)
+      .attr("x", cx).attr("y", 8).attr("text-anchor", "middle")
+      .attr("font-size", "10px").attr("font-weight", "600")
+      .attr("fill", "currentColor").attr("fill-opacity", 0.5)
       .text("MORE RISE");
 
     g.append("text")
-      .attr("x", cx)
-      .attr("y", h - 2)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "10px")
-      .attr("font-weight", "600")
-      .attr("fill", "currentColor")
-      .attr("fill-opacity", 0.5)
+      .attr("x", cx).attr("y", h - 2).attr("text-anchor", "middle")
+      .attr("font-size", "10px").attr("font-weight", "600")
+      .attr("fill", "currentColor").attr("fill-opacity", 0.5)
       .text("MORE DROP");
 
-    const armSide = pThrows === "L" ? "Toward 3B" : "Toward 3B";
-    const gloveSide = pThrows === "L" ? "Toward 1B" : "Toward 1B";
+    // Fix L1: arm/glove side labels differ by handedness
+    const gloveSide = pThrows === "L" ? "Toward 1B" : "Toward 3B";
+    const armSide = pThrows === "L" ? "Toward 3B" : "Toward 1B";
 
     g.append("text")
-      .attr("x", 4)
-      .attr("y", cy - 6)
-      .attr("text-anchor", "start")
-      .attr("font-size", "9px")
-      .attr("fill", "currentColor")
+      .attr("x", 4).attr("y", cy - 6).attr("text-anchor", "start")
+      .attr("font-size", "9px").attr("fill", "currentColor")
       .attr("fill-opacity", 0.45)
-      .text(`◀ ${gloveSide}`);
+      .text(`\u25C0 ${gloveSide}`);
 
     g.append("text")
-      .attr("x", w - 4)
-      .attr("y", cy - 6)
-      .attr("text-anchor", "end")
-      .attr("font-size", "9px")
-      .attr("fill", "currentColor")
+      .attr("x", w - 4).attr("y", cy - 6).attr("text-anchor", "end")
+      .attr("font-size", "9px").attr("fill", "currentColor")
       .attr("fill-opacity", 0.45)
-      .text(`${armSide} ▶`);
+      .text(`${armSide} \u25B6`);
 
-    // League average ellipses (behind dots)
+    // League average ellipses
     if (leagueAverages?.length) {
       const ellipseGroup = g.append("g").attr("class", "league-ellipses");
       leagueAverages.forEach((la) => {
@@ -191,32 +144,17 @@ export default function PitchMovementPlot({
     }
 
     // Velocity scale for point size
-    const veloExtent = d3.extent(
+    const veloExtent = extent(
       data.filter((d) => d.release_speed != null),
       (d) => d.release_speed!,
     ) as [number, number];
-    const sizeScale = d3
-      .scaleLinear()
+    const sizeScale = scaleLinear()
       .domain(veloExtent[0] != null ? veloExtent : [70, 100])
       .range([3, 6])
       .clamp(true);
 
     // Tooltip
-    const tooltip = d3
-      .select("body")
-      .append("div")
-      .attr("class", "movement-tooltip")
-      .style("position", "absolute")
-      .style("pointer-events", "none")
-      .style("background", "hsl(0 0% 9% / 0.92)")
-      .style("color", "#fafafa")
-      .style("padding", "6px 10px")
-      .style("border-radius", "6px")
-      .style("font-size", "12px")
-      .style("line-height", "1.5")
-      .style("box-shadow", "0 2px 8px rgba(0,0,0,0.3)")
-      .style("opacity", 0)
-      .style("z-index", "9999");
+    const tooltip = createTooltip();
 
     // Scatter dots
     g.append("g")
@@ -236,30 +174,26 @@ export default function PitchMovementPlot({
       .attr("stroke-width", 0.5)
       .style("cursor", "pointer")
       .on("mouseenter", function (event, d) {
-        d3.select(this).attr("r", 8).attr("fill-opacity", 1);
-        tooltip
-          .html(
-            `<strong>${d.pitch_name ?? d.pitch_type}</strong><br/>` +
-              `Horiz: ${d.pfx_x.toFixed(1)}" | Vert: ${d.pfx_z.toFixed(1)}"<br/>` +
-              `Velo: ${d.release_speed != null ? `${d.release_speed.toFixed(1)} mph` : "N/A"}`,
-          )
-          .style("opacity", 1)
-          .style("left", `${event.pageX + 12}px`)
-          .style("top", `${event.pageY - 10}px`);
+        select(this).attr("r", 8).attr("fill-opacity", 1);
+        showTooltip(
+          tooltip,
+          `<strong>${d.pitch_name ?? d.pitch_type}</strong><br/>` +
+            `Horiz: ${d.pfx_x.toFixed(1)}" | Vert: ${d.pfx_z.toFixed(1)}"<br/>` +
+            `Velo: ${d.release_speed != null ? `${d.release_speed.toFixed(1)} mph` : "N/A"}`,
+          event,
+        );
       })
       .on("mousemove", function (event) {
-        tooltip
-          .style("left", `${event.pageX + 12}px`)
-          .style("top", `${event.pageY - 10}px`);
+        moveTooltip(tooltip, event);
       })
       .on("mouseleave", function (_event, d) {
-        d3.select(this)
+        select(this)
           .attr(
             "r",
             d.release_speed != null ? sizeScale(d.release_speed) : 4,
           )
           .attr("fill-opacity", 0.7);
-        tooltip.style("opacity", 0);
+        hideTooltip(tooltip);
       });
 
     return () => {
@@ -285,7 +219,13 @@ export default function PitchMovementPlot({
 
   return (
     <div>
-      <svg ref={svgRef} />
+      <div ref={containerRef} className="w-full max-w-[520px]">
+        <svg
+          ref={svgRef}
+          role="img"
+          aria-label={`Pitch movement plot showing horizontal and vertical break for ${data.length} pitches`}
+        />
+      </div>
       {pitchSummary && pitchSummary.length > 0 && (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-sm">

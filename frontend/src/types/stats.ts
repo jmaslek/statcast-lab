@@ -16,6 +16,8 @@ export interface HittingLeaderRow {
   hard_hit_pct: number;
   xba: number | null;
   xwoba: number | null;
+  woba: number | null;
+  wrc_plus: number | null;
 }
 
 export interface HittingLeaderboard {
@@ -64,6 +66,8 @@ export interface WarLeaderboard {
   batting: BattingWarRow[];
   pitching: PitchingWarRow[];
   season: number;
+  batting_total?: number;
+  pitching_total?: number;
 }
 
 export interface PitchingLeaderRow {
@@ -188,6 +192,111 @@ export interface PlatoonRow {
 
 export interface PlatoonLeaderboard {
   players: PlatoonRow[];
+  season: number;
+  total: number;
+}
+
+export interface BaserunningRow {
+  player_id: number;
+  name: string;
+  sb: number;
+  cs: number;
+  sb_pct: number;
+  sb_2b: number;
+  sb_3b: number;
+  sb_home: number;
+  pickoffs: number;
+  wp_advances: number;
+  pb_advances: number;
+  br_runs: number;
+}
+
+export interface BaserunningLeaderboard {
+  players: BaserunningRow[];
+  season: number;
+  total: number;
+}
+
+export interface PitcherBaserunningRow {
+  player_id: number;
+  name: string;
+  sb_against: number;
+  cs_by: number;
+  sb_pct_against: number;
+  wp: number;
+  balk: number;
+  pickoff_attempts: number;
+  pickoff_outs: number;
+}
+
+export interface PitcherBaserunningLeaderboard {
+  players: PitcherBaserunningRow[];
+  season: number;
+  total: number;
+}
+
+export interface AbsChallengeRow {
+  name: string;
+  team: string;
+  challenges: number;
+  overturns: number;
+  confirms: number;
+  overturn_pct: number;
+  k_flips: number;
+  bb_flips: number;
+}
+
+export interface AbsLeaderboard {
+  rows: AbsChallengeRow[];
+  season: number;
+  challenge_type: string;
+  total: number;
+}
+
+export interface AbsChallengeEvent {
+  game_pk: number;
+  play_id: string;
+  game_date: string;
+  inning: number;
+  outs: number;
+  count: string;
+  batter_name: string;
+  pitcher_name: string;
+  catcher_name: string;
+  bat_team: string;
+  fld_team: string;
+  plate_x: number;
+  plate_z: number;
+  sz_top: number;
+  sz_bot: number;
+  original_call: string;
+  result: string;
+  is_overturned: boolean;
+  edge_dist: number;
+}
+
+export interface AbsChallengeEventList {
+  events: AbsChallengeEvent[];
+  entity_name: string;
+  season: number;
+  total: number;
+}
+
+// ---- Bat Tracking ----
+
+export interface BatTrackingRow {
+  player_id: number;
+  name: string;
+  swings: number;
+  avg_bat_speed: number;
+  max_bat_speed: number;
+  avg_swing_length: number | null;
+  fast_swing_rate: number;
+  avg_barrel_bat_speed: number | null;
+}
+
+export interface BatTrackingLeaderboard {
+  players: BatTrackingRow[];
   season: number;
   total: number;
 }

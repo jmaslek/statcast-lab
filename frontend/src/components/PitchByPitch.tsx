@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { pitchResultColor } from "@/lib/chart-utils";
 import type { GameDetail, PitchDetail } from "@/hooks/use-games";
 
 interface AtBat {
@@ -17,7 +18,9 @@ interface AtBat {
   inning: number;
   inningTopbot: string;
   pitcher: number;
+  pitcherName: string | null;
   batter: number;
+  batterName: string | null;
   pitches: PitchDetail[];
   result: string | null;
 }
@@ -64,15 +67,7 @@ function MiniStrikeZone({ pitches }: { pitches: PitchDetail[] }) {
     return pad + ((4.5 - plateZ) / 4.0) * zoneH;
   }
 
-  function pitchColor(desc: string): string {
-    const d = desc.toLowerCase();
-    if (d.includes("called_strike") || d.includes("swinging_strike"))
-      return "#ef4444";
-    if (d.includes("ball") || d.includes("blocked")) return "#3b82f6";
-    if (d.includes("foul")) return "#f59e0b";
-    if (d.includes("hit_into_play")) return "#22c55e";
-    return "#94a3b8";
-  }
+  const pitchDotColor = pitchResultColor;
 
   return (
     <svg
@@ -88,7 +83,8 @@ function MiniStrikeZone({ pitches }: { pitches: PitchDetail[] }) {
         width={toSvgX(0.83) - toSvgX(-0.83)}
         height={toSvgY(1.5) - toSvgY(3.5)}
         fill="none"
-        stroke="#71717a"
+        stroke="currentColor"
+        className="text-muted-foreground"
         strokeWidth="1"
         strokeDasharray="3,2"
       />
@@ -101,7 +97,7 @@ function MiniStrikeZone({ pitches }: { pitches: PitchDetail[] }) {
             cx={toSvgX(p.plate_x!)}
             cy={toSvgY(p.plate_z!)}
             r={3}
-            fill={pitchColor(p.description)}
+            fill={pitchDotColor(p.description)}
             opacity={0.8}
           />
         ))}
@@ -127,7 +123,9 @@ export function PitchByPitch({ game, isLoading }: PitchByPitchProps) {
           inning: pitch.inning,
           inningTopbot: pitch.inning_topbot,
           pitcher: pitch.pitcher,
+          pitcherName: pitch.pitcher_name,
           batter: pitch.batter,
+          batterName: pitch.batter_name,
           pitches: [],
           result: null,
         });
@@ -177,7 +175,7 @@ export function PitchByPitch({ game, isLoading }: PitchByPitchProps) {
   }
 
   return (
-    <div className="mt-6 space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold">
           {game.away_team} @ {game.home_team} &mdash; Pitch-by-Pitch
@@ -207,13 +205,18 @@ export function PitchByPitch({ game, isLoading }: PitchByPitchProps) {
               <button
                 className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors text-left"
                 onClick={() => toggleAtBat(ab.atBatNumber)}
+                aria-expanded={isExpanded}
+                aria-controls={`atbat-${ab.atBatNumber}`}
               >
                 <div className="flex items-center gap-3">
                   <span className="text-sm font-mono font-medium text-muted-foreground w-8">
                     {inningLabel(ab.inning, ab.inningTopbot)}
                   </span>
-                  <span className="text-sm">
-                    P:{ab.pitcher} vs B:{ab.batter}
+                  <span className="text-sm font-medium">
+                    {ab.batterName ?? ab.batter}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    vs {ab.pitcherName ?? ab.pitcher}
                   </span>
                   <span className="text-xs text-muted-foreground">
                     ({ab.pitches.length} pitch
@@ -235,7 +238,7 @@ export function PitchByPitch({ game, isLoading }: PitchByPitchProps) {
 
               {/* Expanded pitch details */}
               {isExpanded && (
-                <div className="border-t px-4 py-2">
+                <div id={`atbat-${ab.atBatNumber}`} className="border-t px-4 py-2">
                   <Table>
                     <TableHeader>
                       <TableRow>

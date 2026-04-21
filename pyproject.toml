@@ -16,6 +16,10 @@ dependencies = [
     "ipykernel>=7.2.0",
     "scikit-learn>=1.8.0",
     "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
+    "pymc>=5.28.0",
+    "arviz>=1.0.0",
+    "patsy>=1.0.2",
 ]
 
 [project.optional-dependencies]
@@ -35,3 +39,6 @@ packages = ["pipeline", "backend"]
 
 [project.scripts]
 mlb = "pipeline.cli:cli"
+
+[tool.ruff]
+extend-exclude = ["notebooks/*.ipynb"]

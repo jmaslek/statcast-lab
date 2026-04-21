@@ -1,6 +1,15 @@
 from litestar import Controller, get
 from backend.db import Client
 from backend.models.framing import FramingLeaderboard, FramingLeaderRow
+from backend.utils import sort_and_limit
+
+_FRAMING_SORT_COLS = {
+    "framing_runs",
+    "strikes_above_avg",
+    "strike_rate",
+    "total_called",
+    "called_strikes",
+}
 
 
 class FramingController(Controller):
@@ -11,7 +20,10 @@ class FramingController(Controller):
         self,
         client: Client,
         season: int = 2025,
+        sort: str = "framing_runs",
         limit: int = 50,
+        desc: bool = True,
+        offset: int = 0,
     ) -> FramingLeaderboard:
 
         result = client.query(
@@ -26,10 +38,8 @@ class FramingController(Controller):
             FROM player_season_framing AS f FINAL
             JOIN players AS p FINAL ON f.catcher_id = p.player_id
             WHERE f.season = {season:UInt16}
-            ORDER BY f.framing_runs DESC
-            LIMIT {limit:UInt32}
             """,
-            parameters={"season": season, "limit": limit},
+            parameters={"season": season},
         )
 
         players = []
@@ -58,4 +68,7 @@ class FramingController(Controller):
                 )
             )
 
-        return FramingLeaderboard(players=players, season=season, total=len(players))
+        players, total = sort_and_limit(players, sort, _FRAMING_SORT_COLS, desc, limit, offset=offset)
+        return FramingLeaderboard(
+            players=players, season=season, total=total
+        )

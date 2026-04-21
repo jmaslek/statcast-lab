@@ -439,6 +439,197 @@ ORDER BY (catcher_id, season)
 """
 
 
+ABS_CHALLENGES_DDL = """
+CREATE TABLE IF NOT EXISTS abs_challenges (
+    season UInt16,
+    challenge_type LowCardinality(String),
+    entity_name String,
+    team_abbr LowCardinality(String),
+    total_vs_expected Float64,
+    net_for Float64,
+    net_against Float64,
+    n_challenges UInt32,
+    n_overturns UInt32,
+    n_confirms UInt32,
+    rate_overturns Float64,
+    n_strikeouts_flip UInt32,
+    n_walks_flip UInt32,
+    n_challenges_against UInt32,
+    n_overturns_against UInt32,
+    rate_overturns_against Nullable(Float64),
+    n_strikeouts_flip_against UInt32,
+    n_walks_flip_against UInt32
+) ENGINE = ReplacingMergeTree()
+ORDER BY (season, challenge_type, entity_name, team_abbr)
+"""
+
+
+SEASON_RE_COUNT_MATRIX_DDL = """
+CREATE TABLE IF NOT EXISTS season_re_count_matrix (
+    season UInt16,
+    base_out_state UInt8,
+    balls UInt8,
+    strikes UInt8,
+    expected_runs Float64,
+    occurrences UInt32
+) ENGINE = ReplacingMergeTree()
+ORDER BY (season, base_out_state, balls, strikes)
+"""
+
+
+PLAYER_PERCENTILES_DDL = """
+CREATE TABLE IF NOT EXISTS player_percentiles (
+    player_id UInt32,
+    season UInt16,
+    player_type LowCardinality(String),
+    stat_name LowCardinality(String),
+    stat_value Float64,
+    percentile UInt8
+) ENGINE = ReplacingMergeTree()
+ORDER BY (season, player_type, player_id, stat_name)
+"""
+
+
+ABS_CHALLENGE_EVENTS_DDL = """
+CREATE TABLE IF NOT EXISTS abs_challenge_events (
+    season UInt16,
+    game_pk UInt32,
+    play_id String,
+    game_date Date,
+    event_inning UInt8,
+    outs UInt8,
+    pre_ball_count UInt8,
+    pre_strike_count UInt8,
+    batter_name String,
+    pitcher_name String,
+    catcher_name String,
+    bat_team_abbr LowCardinality(String),
+    fld_team_abbr LowCardinality(String),
+    plate_x Float64,
+    plate_z Float64,
+    sz_top Float64,
+    sz_bot Float64,
+    original_is_strike UInt8,
+    is_overturned UInt8,
+    is_strike3_added UInt8,
+    is_strike3_removed UInt8,
+    is_ball4_added UInt8,
+    is_ball4_removed UInt8,
+    is_batter_challenge UInt8,
+    is_catcher_challenge UInt8,
+    is_pitcher_challenge UInt8,
+    edge_dist Float64,
+    chal_gained Float64,
+    chal_lost Float64
+) ENGINE = ReplacingMergeTree()
+ORDER BY (season, game_pk, play_id)
+"""
+
+
+GAME_PLAYS_DDL = """
+CREATE TABLE IF NOT EXISTS game_plays (
+    game_pk UInt32,
+    game_date Date,
+    season UInt16,
+    at_bat_index UInt16,
+    inning UInt8,
+    half_inning LowCardinality(String),
+
+    -- Matchup
+    batter_id UInt32,
+    pitcher_id UInt32,
+    bat_side LowCardinality(String),
+    pitch_hand LowCardinality(String),
+
+    -- Result
+    result_type LowCardinality(String),
+    event LowCardinality(Nullable(String)),
+    event_type LowCardinality(Nullable(String)),
+    description String,
+    rbi UInt8,
+    away_score UInt8,
+    home_score UInt8,
+    is_out UInt8,
+
+    -- Count at end of PA
+    balls UInt8,
+    strikes UInt8,
+    outs UInt8,
+
+    -- Flags
+    is_scoring_play UInt8,
+    is_complete UInt8,
+
+    -- Teams
+    home_team LowCardinality(String),
+    away_team LowCardinality(String)
+) ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(game_date)
+ORDER BY (game_pk, at_bat_index)
+"""
+
+
+PLAY_RUNNERS_DDL = """
+CREATE TABLE IF NOT EXISTS play_runners (
+    game_pk UInt32,
+    game_date Date,
+    season UInt16,
+    at_bat_index UInt16,
+    play_event_index UInt16,
+
+    -- Runner
+    runner_id UInt32,
+
+    -- Movement
+    origin_base LowCardinality(Nullable(String)),
+    start_base LowCardinality(Nullable(String)),
+    end_base LowCardinality(Nullable(String)),
+    is_out UInt8,
+    out_base LowCardinality(Nullable(String)),
+    out_number Nullable(UInt8),
+
+    -- Event details
+    event LowCardinality(Nullable(String)),
+    event_type LowCardinality(Nullable(String)),
+    movement_reason LowCardinality(Nullable(String)),
+
+    -- Scoring
+    is_scoring_event UInt8,
+    rbi UInt8,
+    earned UInt8,
+    team_unearned UInt8,
+    responsible_pitcher_id Nullable(UInt32),
+
+    -- Context (denormalized for easy querying)
+    inning UInt8,
+    half_inning LowCardinality(String),
+    batter_id UInt32,
+    pitcher_id UInt32
+) ENGINE = ReplacingMergeTree()
+PARTITION BY toYYYYMM(game_date)
+ORDER BY (game_pk, at_bat_index, runner_id, play_event_index)
+"""
+
+
+def create_plays_tables(client: clickhouse_connect.driver.Client) -> None:
+    """Create game_plays and play_runners tables."""
+    client.command(GAME_PLAYS_DDL)
+    client.command(PLAY_RUNNERS_DDL)
+
+
+def create_re_count_matrix_table(client: clickhouse_connect.driver.Client) -> None:
+    client.command(SEASON_RE_COUNT_MATRIX_DDL)
+
+
+def create_percentiles_table(client: clickhouse_connect.driver.Client) -> None:
+    client.command(PLAYER_PERCENTILES_DDL)
+
+
+def create_abs_table(client: clickhouse_connect.driver.Client) -> None:
+    client.command(ABS_CHALLENGES_DDL)
+    client.command(ABS_CHALLENGE_EVENTS_DDL)
+
+
 def create_batted_ball_table(client: clickhouse_connect.driver.Client) -> None:
     client.command(BATTER_BATTED_BALL_DDL)
 
@@ -501,3 +692,7 @@ def create_all_tables(client: clickhouse_connect.driver.Client) -> None:
     create_arsenal_table(client)
     create_park_factors_table(client)
     create_re_tables(client)
+    create_abs_table(client)
+    create_re_count_matrix_table(client)
+    create_percentiles_table(client)
+    create_plays_tables(client)

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import type { REMatrixData, LinearWeightsData, ParkFactorsData } from "@/types/analytics";
+import { STALE_TIME } from "@/lib/constants";
+import type { REMatrixData, RECountMatrixData, LinearWeightsData, ParkFactorsData } from "@/types/analytics";
 
 export function useREMatrix(season: number) {
   return useQuery({
@@ -9,6 +10,18 @@ export function useREMatrix(season: number) {
       fetchApi<REMatrixData>("/analytics/re-matrix", {
         season: String(season),
       }),
+    staleTime: STALE_TIME.REFERENCE,
+  });
+}
+
+export function useRECountMatrix(season: number) {
+  return useQuery({
+    queryKey: ["re-count-matrix", season],
+    queryFn: () =>
+      fetchApi<RECountMatrixData>("/analytics/re-count-matrix", {
+        season: String(season),
+      }),
+    staleTime: STALE_TIME.REFERENCE,
   });
 }
 
@@ -19,6 +32,7 @@ export function useLinearWeights(season: number) {
       fetchApi<LinearWeightsData>("/analytics/linear-weights", {
         season: String(season),
       }),
+    staleTime: STALE_TIME.REFERENCE,
   });
 }
 
@@ -29,5 +43,6 @@ export function useParkFactors(season: number) {
       fetchApi<ParkFactorsData>("/analytics/park-factors", {
         season: String(season),
       }),
+    staleTime: STALE_TIME.REFERENCE,
   });
 }

@@ -1,8 +1,16 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useREMatrix, useLinearWeights, useParkFactors } from "@/hooks/use-analytics";
-import type { REMatrixEntry, LinearWeightsRow, ParkFactorRow } from "@/types/analytics";
+import { useREMatrix, useRECountMatrix, useLinearWeights, useParkFactors } from "@/hooks/use-analytics";
+import { SEASONS, DEFAULT_SEASON } from "@/lib/constants";
+import type { REMatrixEntry, RECountEntry, LinearWeightsRow, ParkFactorRow } from "@/types/analytics";
 
 const RUNNER_LABELS: Record<string, string> = {
   "---": "Bases Empty",
@@ -20,14 +28,27 @@ const BASE_STATE_ORDER = ["---", "1--", "-2-", "12-", "--3", "1-3", "-23", "123"
 
 function reColor(value: number, min: number, max: number): string {
   const t = max === min ? 0.5 : (value - min) / (max - min);
-  // Interpolate from red (low) through yellow to green (high)
   const r = Math.round(220 - t * 180);
   const g = Math.round(60 + t * 160);
   const b = Math.round(60);
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-function REMatrixGrid({ entries }: { entries: REMatrixEntry[] }) {
+/** Pick white or dark text based on perceived luminance of an rgb background */
+function textColorForBg(r: number, g: number, b: number): string {
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.5 ? "#1c1917" : "#fafaf9";
+}
+
+function reTextColor(value: number, min: number, max: number): string {
+  const t = max === min ? 0.5 : (value - min) / (max - min);
+  const r = Math.round(220 - t * 180);
+  const g = Math.round(60 + t * 160);
+  const b = Math.round(60);
+  return textColorForBg(r, g, b);
+}
+
+const REMatrixGrid = memo(function REMatrixGrid({ entries }: { entries: REMatrixEntry[] }) {
   const values = entries.map((e) => e.expected_runs);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -72,9 +93,72 @@ function REMatrixGrid({ entries }: { entries: REMatrixEntry[] }) {
                     className="py-2 px-3 text-center tabular-nums font-medium"
                     style={{
                       backgroundColor: reColor(val, min, max),
-                      color: "#fff",
+                      color: reTextColor(val, min, max),
                     }}
                     title={`${entry?.occurrences ?? 0} occurrences`}
+                  >
+                    {val.toFixed(3)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+});
+
+// Base-out options for the dropdown: (base_out_state, label)
+const BASE_OUT_OPTIONS = BASE_STATE_ORDER.flatMap((runners) =>
+  [0, 1, 2].map((outs) => ({
+    state: BASE_STATE_ORDER.indexOf(runners) * 3 + outs,
+    runners,
+    outs,
+    label: `${RUNNER_LABELS[runners]} / ${outs} out${outs !== 1 ? "s" : ""}`,
+  }))
+);
+
+function RECountMatrixGrid({ entries, baseOutState }: { entries: RECountEntry[]; baseOutState: number }) {
+  const filtered = entries.filter((e) => e.base_out_state === baseOutState);
+  if (!filtered.length) return <p className="text-muted-foreground">No data for this situation.</p>;
+
+  const allValues = entries.map((e) => e.expected_runs);
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
+
+  const lookup = new Map<string, RECountEntry>();
+  filtered.forEach((e) => lookup.set(`${e.balls}-${e.strikes}`, e));
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr>
+            <th className="py-2 px-3 text-left font-medium border-b" />
+            <th className="py-2 px-3 text-center font-medium border-b">0 Strikes</th>
+            <th className="py-2 px-3 text-center font-medium border-b">1 Strike</th>
+            <th className="py-2 px-3 text-center font-medium border-b">2 Strikes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[0, 1, 2, 3].map((balls) => (
+            <tr key={balls} className="border-b last:border-0">
+              <td className="py-2 px-3 font-medium text-muted-foreground">
+                {balls} Ball{balls !== 1 ? "s" : ""}
+              </td>
+              {[0, 1, 2].map((strikes) => {
+                const entry = lookup.get(`${balls}-${strikes}`);
+                const val = entry?.expected_runs ?? 0;
+                return (
+                  <td
+                    key={strikes}
+                    className="py-3 px-3 text-center tabular-nums font-semibold text-base"
+                    style={{
+                      backgroundColor: reColor(val, min, max),
+                      color: reTextColor(val, min, max),
+                    }}
+                    title={`${balls}-${strikes} count, ${entry?.occurrences ?? 0} occurrences`}
                   >
                     {val.toFixed(3)}
                   </td>
@@ -147,7 +231,7 @@ function LinearWeightsTable({ weights }: { weights: LinearWeightsRow[] }) {
             const diff =
               cVal != null && fVal != null ? cVal - fVal : null;
             const pctDiff =
-              diff != null && fVal !== 0
+              diff != null && fVal != null && fVal !== 0
                 ? (diff / Math.abs(fVal)) * 100
                 : null;
 
@@ -171,9 +255,9 @@ function LinearWeightsTable({ weights }: { weights: LinearWeightsRow[] }) {
                     <td
                       className={`py-2 px-3 text-right tabular-nums ${
                         diff != null && diff > 0
-                          ? "text-green-500"
+                          ? "text-emerald-700 dark:text-emerald-400"
                           : diff != null && diff < 0
-                            ? "text-red-500"
+                            ? "text-rose-700 dark:text-rose-400"
                             : ""
                       }`}
                     >
@@ -184,9 +268,9 @@ function LinearWeightsTable({ weights }: { weights: LinearWeightsRow[] }) {
                     <td
                       className={`py-2 px-3 text-right tabular-nums ${
                         pctDiff != null && pctDiff > 0
-                          ? "text-green-500"
+                          ? "text-emerald-700 dark:text-emerald-400"
                           : pctDiff != null && pctDiff < 0
-                            ? "text-red-500"
+                            ? "text-rose-700 dark:text-rose-400"
                             : ""
                       }`}
                     >
@@ -206,8 +290,6 @@ function LinearWeightsTable({ weights }: { weights: LinearWeightsRow[] }) {
 }
 
 function pfColor(pf: number, min: number, max: number): string {
-  // Map park factor to color: green (>1.0 hitter-friendly) to red (<1.0 pitcher-friendly)
-  // Center on 1.0, not the data range midpoint
   const t = max === min ? 0.5 : (pf - min) / (max - min);
   const r = Math.round(220 - t * 180);
   const g = Math.round(60 + t * 160);
@@ -215,7 +297,15 @@ function pfColor(pf: number, min: number, max: number): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-function ParkFactorsTable({ factors }: { factors: ParkFactorRow[] }) {
+function pfTextColor(pf: number, min: number, max: number): string {
+  const t = max === min ? 0.5 : (pf - min) / (max - min);
+  const r = Math.round(220 - t * 180);
+  const g = Math.round(60 + t * 160);
+  const b = Math.round(60);
+  return textColorForBg(r, g, b);
+}
+
+const ParkFactorsTable = memo(function ParkFactorsTable({ factors }: { factors: ParkFactorRow[] }) {
   const pfs = factors.map((f) => f.park_factor);
   const min = Math.min(...pfs);
   const max = Math.max(...pfs);
@@ -247,7 +337,7 @@ function ParkFactorsTable({ factors }: { factors: ParkFactorRow[] }) {
                 className="py-2 px-3 text-center tabular-nums font-medium"
                 style={{
                   backgroundColor: pfColor(f.park_factor, min, max),
-                  color: "#fff",
+                  color: pfTextColor(f.park_factor, min, max),
                 }}
               >
                 {f.park_factor.toFixed(3)}
@@ -258,46 +348,100 @@ function ParkFactorsTable({ factors }: { factors: ParkFactorRow[] }) {
       </table>
     </div>
   );
-}
+});
 
-export default function Analytics() {
-  const [season, setSeason] = useState(2025);
+export default function Reference() {
+  const [season, setSeason] = useState(DEFAULT_SEASON);
+  const [reMode, setReMode] = useState<"standard" | "by-count">("standard");
+  const [selectedBaseOut, setSelectedBaseOut] = useState(0); // base_out_state 0 = bases empty, 0 outs
+  const seasonId = "analytics-season";
   const reMatrix = useREMatrix(season);
+  const reCountMatrix = useRECountMatrix(season);
   const linearWeights = useLinearWeights(season);
   const parkFactors = useParkFactors(season);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Analytics</h1>
-        <select
-          value={season}
-          onChange={(e) => setSeason(Number(e.target.value))}
-          className="rounded-md border bg-background px-3 py-1.5 text-sm"
-        >
-          {[2025, 2024, 2023, 2022, 2021].map((y) => (
-            <option key={y} value={y}>
-              {y}
-            </option>
-          ))}
-        </select>
+        <h1>Reference</h1>
+        <div className="flex items-center gap-2">
+          <label htmlFor={seasonId} className="text-sm font-medium">Season</label>
+          <Select
+            value={String(season)}
+            onValueChange={(v) => setSeason(Number(v))}
+          >
+            <SelectTrigger id={seasonId} className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SEASONS.map((s) => (
+                <SelectItem key={s} value={String(s)}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">
-            Run Expectancy Matrix (RE24)
-          </CardTitle>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <CardTitle className="text-lg">
+              Run Expectancy Matrix
+            </CardTitle>
+            <div className="flex items-center gap-3">
+              <div className="flex rounded-md border overflow-hidden text-sm">
+                <button
+                  className={`px-3 py-1.5 ${reMode === "standard" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                  onClick={() => setReMode("standard")}
+                >
+                  Standard (RE24)
+                </button>
+                <button
+                  className={`px-3 py-1.5 border-l ${reMode === "by-count" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                  onClick={() => setReMode("by-count")}
+                >
+                  By Count
+                </button>
+              </div>
+              {reMode === "by-count" && (
+                <Select value={String(selectedBaseOut)} onValueChange={(v) => setSelectedBaseOut(Number(v))}>
+                  <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {BASE_OUT_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.state} value={String(opt.state)}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          {reMatrix.isLoading ? (
-            <Skeleton className="h-[300px] w-full" />
-          ) : reMatrix.data?.entries.length ? (
-            <REMatrixGrid entries={reMatrix.data.entries} />
+          {reMode === "standard" ? (
+            reMatrix.isLoading ? (
+              <Skeleton className="h-[300px] w-full" />
+            ) : reMatrix.data?.entries.length ? (
+              <REMatrixGrid entries={reMatrix.data.entries} />
+            ) : (
+              <p className="text-muted-foreground">
+                No RE24 data available for {season}
+              </p>
+            )
           ) : (
-            <p className="text-muted-foreground">
-              No RE24 data available for {season}
-            </p>
+            reCountMatrix.isLoading ? (
+              <Skeleton className="h-[300px] w-full" />
+            ) : reCountMatrix.data?.entries.length ? (
+              <RECountMatrixGrid
+                entries={reCountMatrix.data.entries}
+                baseOutState={selectedBaseOut}
+              />
+            ) : (
+              <p className="text-muted-foreground">
+                No count-level RE data available for {season}. Run: <code>compute re-count-matrix --season {season}</code>
+              </p>
+            )
           )}
         </CardContent>
       </Card>

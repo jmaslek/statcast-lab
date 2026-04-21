@@ -1,5 +1,12 @@
 import { useEffect, useRef } from "react";
-import * as d3 from "d3";
+import { select } from "d3-selection";
+import { scaleLinear, scaleTime } from "d3-scale";
+import { line, curveMonotoneX } from "d3-shape";
+import { extent } from "d3-array";
+import { axisBottom, axisLeft } from "d3-axis";
+import { timeMonth } from "d3-time";
+import { timeFormat } from "d3-time-format";
+import { useContainerSize } from "@/hooks/use-container-size";
 
 interface DataPoint {
   date: string;
@@ -10,23 +17,22 @@ interface Props {
   data: DataPoint[];
   statName: string;
   leagueAvg?: number;
-  width?: number;
-  height?: number;
 }
 
 export default function RollingStatLine({
   data,
   statName,
   leagueAvg,
-  width = 600,
-  height = 350,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const { ref: containerRef, width: containerWidth } = useContainerSize(600);
+  const width = containerWidth || 600;
+  const height = width * 0.58;
 
   useEffect(() => {
-    if (!svgRef.current || !data.length) return;
+    if (!svgRef.current || !data.length || !width) return;
 
-    const svg = d3.select(svgRef.current);
+    const svg = select(svgRef.current);
     svg.selectAll("*").remove();
 
     const margin = { top: 35, right: 20, bottom: 40, left: 50 };
@@ -39,26 +45,20 @@ export default function RollingStatLine({
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // Parse dates
     const parsedData = data.map((d) => ({
       date: new Date(d.date),
       value: d.value,
     }));
 
-    const xExtent = d3.extent(parsedData, (d) => d.date) as [Date, Date];
-    const yExtent = d3.extent(parsedData, (d) => d.value) as [
-      number,
-      number,
-    ];
+    const xExtent = extent(parsedData, (d) => d.date) as [Date, Date];
+    const yExtent = extent(parsedData, (d) => d.value) as [number, number];
 
-    // Pad y axis
     const yPad = (yExtent[1] - yExtent[0]) * 0.1 || 0.05;
     const yMin = Math.min(yExtent[0] - yPad, leagueAvg ?? Infinity);
     const yMax = Math.max(yExtent[1] + yPad, leagueAvg ?? -Infinity);
 
-    const xScale = d3.scaleTime().domain(xExtent).range([0, w]);
-    const yScale = d3
-      .scaleLinear()
+    const xScale = scaleTime().domain(xExtent).range([0, w]);
+    const yScale = scaleLinear()
       .domain([yMin - yPad * 0.5, yMax + yPad * 0.5])
       .range([h, 0]);
 
@@ -66,94 +66,62 @@ export default function RollingStatLine({
     const yTicks = yScale.ticks(6);
     yTicks.forEach((tick) => {
       g.append("line")
-        .attr("x1", 0)
-        .attr("y1", yScale(tick))
-        .attr("x2", w)
-        .attr("y2", yScale(tick))
-        .attr("stroke", "currentColor")
-        .attr("stroke-opacity", 0.08)
-        .attr("stroke-width", 1);
+        .attr("x1", 0).attr("y1", yScale(tick))
+        .attr("x2", w).attr("y2", yScale(tick))
+        .attr("stroke", "currentColor").attr("stroke-opacity", 0.08);
     });
 
-    // Line generator
-    const line = d3
-      .line<{ date: Date; value: number }>()
+    const lineFn = line<{ date: Date; value: number }>()
       .x((d) => xScale(d.date))
       .y((d) => yScale(d.value))
-      .curve(d3.curveMonotoneX);
+      .curve(curveMonotoneX);
 
-    // Draw line
     g.append("path")
       .datum(parsedData)
       .attr("fill", "none")
       .attr("stroke", "#3b82f6")
       .attr("stroke-width", 2.5)
-      .attr("d", line);
+      .attr("d", lineFn);
 
-    // League average reference line
     if (leagueAvg != null) {
       g.append("line")
-        .attr("x1", 0)
-        .attr("y1", yScale(leagueAvg))
-        .attr("x2", w)
-        .attr("y2", yScale(leagueAvg))
-        .attr("stroke", "#ef4444")
-        .attr("stroke-width", 1.5)
-        .attr("stroke-dasharray", "8,4")
-        .attr("stroke-opacity", 0.7);
+        .attr("x1", 0).attr("y1", yScale(leagueAvg))
+        .attr("x2", w).attr("y2", yScale(leagueAvg))
+        .attr("stroke", "#ef4444").attr("stroke-width", 1.5)
+        .attr("stroke-dasharray", "8,4").attr("stroke-opacity", 0.7);
 
       g.append("text")
-        .attr("x", w - 4)
-        .attr("y", yScale(leagueAvg) - 6)
-        .attr("text-anchor", "end")
-        .attr("font-size", "10px")
-        .attr("fill", "#ef4444")
-        .attr("fill-opacity", 0.8)
+        .attr("x", w - 4).attr("y", yScale(leagueAvg) - 6)
+        .attr("text-anchor", "end").attr("font-size", "10px")
+        .attr("fill", "#ef4444").attr("fill-opacity", 0.8)
         .text(`Lg Avg: ${leagueAvg.toFixed(3)}`);
     }
 
-    // Axes
-    const xAxis = d3
-      .axisBottom(xScale)
-      .ticks(d3.timeMonth.every(1))
-      .tickFormat((d) => d3.timeFormat("%b")(d as Date));
-    const yAxis = d3.axisLeft(yScale).ticks(6);
+    const xAxis = axisBottom(xScale)
+      .ticks(timeMonth.every(1))
+      .tickFormat((d) => timeFormat("%b")(d as Date));
+    const yAxis = axisLeft(yScale).ticks(6);
 
     g.append("g")
       .attr("transform", `translate(0,${h})`)
       .call(xAxis)
-      .selectAll("text")
-      .attr("fill", "currentColor");
+      .selectAll("text").attr("fill", "currentColor");
 
     g.append("g").call(yAxis).selectAll("text").attr("fill", "currentColor");
 
-    // Title
     g.append("text")
-      .attr("x", w / 2)
-      .attr("y", -15)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "14px")
-      .attr("font-weight", "600")
-      .attr("fill", "currentColor")
-      .text(statName);
-
-    // Axis labels
-    g.append("text")
-      .attr("x", w / 2)
-      .attr("y", h + 35)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "12px")
-      .attr("fill", "currentColor")
-      .text("Date");
+      .attr("x", w / 2).attr("y", -15).attr("text-anchor", "middle")
+      .attr("font-size", "14px").attr("font-weight", "600")
+      .attr("fill", "currentColor").text(statName);
 
     g.append("text")
-      .attr("x", -h / 2)
-      .attr("y", -38)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "12px")
-      .attr("fill", "currentColor")
-      .attr("transform", "rotate(-90)")
-      .text(statName);
+      .attr("x", w / 2).attr("y", h + 35).attr("text-anchor", "middle")
+      .attr("font-size", "12px").attr("fill", "currentColor").text("Date");
+
+    g.append("text")
+      .attr("x", -h / 2).attr("y", -38).attr("text-anchor", "middle")
+      .attr("font-size", "12px").attr("fill", "currentColor")
+      .attr("transform", "rotate(-90)").text(statName);
   }, [data, statName, leagueAvg, width, height]);
 
   if (!data.length) {
@@ -164,5 +132,13 @@ export default function RollingStatLine({
     );
   }
 
-  return <svg ref={svgRef} />;
+  return (
+    <div ref={containerRef} className="w-full max-w-[600px]">
+      <svg
+        ref={svgRef}
+        role="img"
+        aria-label={`Rolling ${statName} line chart with ${data.length} data points`}
+      />
+    </div>
+  );
 }

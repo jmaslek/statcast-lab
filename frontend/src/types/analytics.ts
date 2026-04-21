@@ -43,3 +43,18 @@ export interface ParkFactorsData {
   season: number;
   factors: ParkFactorRow[];
 }
+
+export interface RECountEntry {
+  base_out_state: number;
+  outs: number;
+  runners_on: string;
+  balls: number;
+  strikes: number;
+  expected_runs: number;
+  occurrences: number;
+}
+
+export interface RECountMatrixData {
+  season: number;
+  entries: RECountEntry[];
+}

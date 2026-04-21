@@ -1,11 +1,13 @@
-"""wOBA calculation pipeline."""
+"""wOBA / wRC+ from published FanGraphs weights (fallback: most recent year).
+
+See get_custom_weights() to use internally-derived weights from RE24 instead.
+"""
 
 from loguru import logger
 
-from pipeline.compute._common import Client
+from pipeline.compute._common import Client, delete_season
 
-# Published FanGraphs wOBA weights by season
-# Source: https://www.fangraphs.com/guts.aspx?type=cn
+# FanGraphs wOBA weights — https://www.fangraphs.com/guts.aspx?type=cn
 WOBA_WEIGHTS: dict[int, dict[str, float]] = {
     2015: {
         "wBB": 0.687,
@@ -121,22 +123,13 @@ WOBA_WEIGHTS: dict[int, dict[str, float]] = {
 
 
 def get_weights(season: int) -> dict[str, float]:
-    """Get wOBA weights for a season. Falls back to most recent if not available."""
     if season in WOBA_WEIGHTS:
         return WOBA_WEIGHTS[season]
-    # Fall back to most recent year
-    latest = max(WOBA_WEIGHTS.keys())
-    return WOBA_WEIGHTS[latest]
+    return WOBA_WEIGHTS[max(WOBA_WEIGHTS)]
 
 
-def get_custom_weights(
-    client: Client,
-    season: int,
-) -> dict[str, float] | None:
-    """Read custom linear weights from season_linear_weights table.
-
-    Returns None if no custom weights exist for the season.
-    """
+def get_custom_weights(client: Client, season: int) -> dict[str, float] | None:
+    """Load internally-derived weights from season_linear_weights, or None."""
     result = client.query(
         """
         SELECT wBB, wHBP, w1B, w2B, w3B, wHR, woba_scale, lg_woba, lg_r_pa
@@ -161,53 +154,30 @@ def get_custom_weights(
     }
 
 
-def store_fangraphs_weights(
-    client: Client,
-    season: int,
-) -> None:
-    """Store FanGraphs weights in season_linear_weights for comparison."""
-    weights = get_weights(season)
-    lg_r_pa = (
-        weights["lg_woba"] / weights["woba_scale"] if weights["woba_scale"] > 0 else 0.0
-    )
+def store_fangraphs_weights(client: Client, season: int) -> None:
+    """Upsert the FanGraphs weight row so we can diff against custom weights."""
+    w = get_weights(season)
+    lg_r_pa = w["lg_woba"] / w["woba_scale"] if w["woba_scale"] > 0 else 0.0
     client.command(
-        "ALTER TABLE season_linear_weights DELETE WHERE season = {season:UInt16} AND source = 'fangraphs'",
+        "ALTER TABLE season_linear_weights DELETE "
+        "WHERE season = {season:UInt16} AND source = 'fangraphs'",
         parameters={"season": season},
     )
+    # run_out isn't published by FanGraphs — we derive it only for custom weights.
     client.insert(
         "season_linear_weights",
-        [
-            [
-                season,
-                "fangraphs",
-                weights["wBB"],
-                weights["wHBP"],
-                weights["w1B"],
-                weights["w2B"],
-                weights["w3B"],
-                weights["wHR"],
-                0.0,  # run_out not available from FanGraphs
-                weights["lg_woba"],
-                weights["woba_scale"],
-                lg_r_pa,
-            ]
-        ],
+        [[
+            season, "fangraphs",
+            w["wBB"], w["wHBP"], w["w1B"], w["w2B"], w["w3B"], w["wHR"],
+            0.0,
+            w["lg_woba"], w["woba_scale"], lg_r_pa,
+        ]],
         column_names=[
-            "season",
-            "source",
-            "wBB",
-            "wHBP",
-            "w1B",
-            "w2B",
-            "w3B",
-            "wHR",
-            "run_out",
-            "lg_woba",
-            "woba_scale",
-            "lg_r_pa",
+            "season", "source",
+            "wBB", "wHBP", "w1B", "w2B", "w3B", "wHR",
+            "run_out", "lg_woba", "woba_scale", "lg_r_pa",
         ],
     )
-    logger.info("Stored FanGraphs weights for %d in season_linear_weights", season)
 
 
 def calculate_player_woba(
@@ -221,12 +191,13 @@ def calculate_player_woba(
     sf: int,
     weights: dict[str, float],
 ) -> float:
-    """Calculate wOBA for a single player given counting stats and weights.
-
-    Note: Statcast separates 'walk' from 'intent_walk', so bb already
-    excludes intentional walks — no IBB subtraction needed.
-    """
-    numerator = (
+    # Standard wOBA denominator: AB + BB + SF + HBP. Statcast tracks `walk` and
+    # `intent_walk` as separate events, so `bb` here already excludes IBBs and
+    # no IBB subtraction is needed.
+    denom = ab + bb + sf + hbp
+    if denom == 0:
+        return 0.0
+    num = (
         weights["wBB"] * bb
         + weights["wHBP"] * hbp
         + weights["w1B"] * singles
@@ -234,10 +205,33 @@ def calculate_player_woba(
         + weights["w3B"] * triples
         + weights["wHR"] * hr
     )
-    denominator = ab + bb + sf + hbp
-    if denominator == 0:
-        return 0.0
-    return numerator / denominator
+    return num / denom
+
+
+def _load_park_factors(client: Client, season: int) -> dict[str, float]:
+    result = client.query(
+        """
+        SELECT team, park_factor
+        FROM season_park_factors FINAL
+        WHERE season = {season:UInt16}
+        """,
+        parameters={"season": season},
+    )
+    return dict(result.result_rows)
+
+
+PLAYER_WOBA_DDL = """
+CREATE TABLE IF NOT EXISTS player_woba (
+    player_id UInt32,
+    season UInt16,
+    pa UInt64,
+    woba Float64,
+    woba_scale Float64,
+    lg_woba Float64,
+    wrc_plus Float64
+) ENGINE = ReplacingMergeTree()
+ORDER BY (player_id, season)
+"""
 
 
 def compute_woba_for_season(
@@ -246,100 +240,82 @@ def compute_woba_for_season(
     min_pa: int = 50,
     weight_source: str = "fangraphs",
 ) -> int:
-    """Compute wOBA for all qualifying players in a season and store results.
+    """Compute wOBA and park-adjusted wRC+. Park factors default to 1.0 (neutral).
 
-    Args:
-        weight_source: "fangraphs" for hardcoded FanGraphs weights (default),
-                       "custom" to read from season_linear_weights table.
-
-    Returns number of players computed.
+    weight_source: 'fangraphs' (published) or 'custom' (from RE24-derived table).
     """
     if weight_source == "custom":
         weights = get_custom_weights(client, season)
         if weights is None:
-            msg = (
+            raise ValueError(
                 f"No custom weights for {season}. "
-                "Run 'compute linear-weights' first, or use --weight-source=fangraphs."
+                "Run 'compute linear-weights' first, or pass --weight-source=fangraphs."
             )
-            raise ValueError(msg)
-        logger.info("Using custom linear weights for %d", season)
+        logger.info("Using custom weights for {}", season)
     else:
         weights = get_weights(season)
         store_fangraphs_weights(client, season)
-        logger.info("Using FanGraphs weights for %d", season)
+        logger.info("Using FanGraphs weights for {}", season)
 
-    # Create the woba results table if it doesn't exist
-    client.command("""
-        CREATE TABLE IF NOT EXISTS player_woba (
-            player_id UInt32,
-            season UInt16,
-            pa UInt64,
-            woba Float64,
-            woba_scale Float64,
-            lg_woba Float64,
-            wrc_plus Float64
-        ) ENGINE = ReplacingMergeTree()
-        ORDER BY (player_id, season)
-    """)
+    client.command(PLAYER_WOBA_DDL)
 
-    # Query player counting stats from the materialized view
+    park_factors = _load_park_factors(client, season)
+    if park_factors:
+        logger.info("{} park factors loaded — wRC+ park-adjusted", len(park_factors))
+    else:
+        logger.warning(
+            "No park factors for {} — wRC+ not park-adjusted "
+            "(run 'compute park-factors' first)", season,
+        )
+
     result = client.query(
         """
         SELECT
-            batter AS player_id,
-            pa, ab, singles, doubles, triples, home_runs,
-            walks, hbp, sac_flies
-        FROM player_season_hitting FINAL
-        WHERE season = {season:UInt16}
-          AND pa >= {min_pa:UInt64}
+            h.batter AS player_id,
+            h.pa, h.ab, h.singles, h.doubles, h.triples, h.home_runs,
+            h.walks, h.hbp, h.sac_flies,
+            p.team
+        FROM player_season_hitting AS h FINAL
+        JOIN players AS p FINAL ON h.batter = p.player_id
+        WHERE h.season = {season:UInt16}
+          AND h.pa >= {min_pa:UInt64}
         """,
         parameters={"season": season, "min_pa": min_pa},
     )
 
-    rows_to_insert = []
-    for row in result.result_rows:
-        pid, pa, ab, singles, doubles, triples, hr, bb, hbp, sf = row
+    lg_woba = weights["lg_woba"]
+    woba_scale = weights["woba_scale"]
+    lg_r_pa = lg_woba / woba_scale if woba_scale > 0 else 0.0
 
+    rows = []
+    for (
+        pid, pa, ab, singles, doubles, triples, hr, bb, hbp, sf, team,
+    ) in result.result_rows:
         woba = calculate_player_woba(
-            bb=bb,
-            hbp=hbp,
-            singles=singles,
-            doubles=doubles,
-            triples=triples,
-            hr=hr,
-            ab=ab,
-            sf=sf,
-            weights=weights,
+            bb=bb, hbp=hbp,
+            singles=singles, doubles=doubles, triples=triples, hr=hr,
+            ab=ab, sf=sf, weights=weights,
         )
 
-        # wRC+ = ((wOBA - lgwOBA) / wOBA_scale + lgR/PA) / lgR/PA * 100
-        # Simplified: using league R/PA approximation
-        lg_r_pa = weights["lg_woba"] / weights["woba_scale"]
-        wrc_plus = (
-            ((woba - weights["lg_woba"]) / weights["woba_scale"] + lg_r_pa)
-            / lg_r_pa
-            * 100
-            if lg_r_pa > 0
-            else 100.0
-        )
+        # wRC+ = ((wRAA/PA + lgR/PA + lgR/PA*(1-PF)) / lgR/PA) * 100
+        # At a neutral park (PF=1.0) this collapses to the un-adjusted form.
+        if lg_r_pa > 0:
+            wraa_per_pa = (woba - lg_woba) / woba_scale
+            pf = park_factors.get(team, 1.0)
+            wrc_plus = ((wraa_per_pa + lg_r_pa * (2 - pf)) / lg_r_pa) * 100
+        else:
+            wrc_plus = 100.0
 
-        rows_to_insert.append(
-            [pid, season, pa, woba, weights["woba_scale"], weights["lg_woba"], wrc_plus]
-        )
+        rows.append([pid, season, pa, woba, woba_scale, lg_woba, wrc_plus])
 
-    if rows_to_insert:
+    delete_season(client, "player_woba", season)
+    if rows:
         client.insert(
             "player_woba",
-            rows_to_insert,
+            rows,
             column_names=[
-                "player_id",
-                "season",
-                "pa",
-                "woba",
-                "woba_scale",
-                "lg_woba",
-                "wrc_plus",
+                "player_id", "season", "pa",
+                "woba", "woba_scale", "lg_woba", "wrc_plus",
             ],
         )
-
-    return len(rows_to_insert)
+    return len(rows)

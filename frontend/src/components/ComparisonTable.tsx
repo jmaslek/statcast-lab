@@ -7,22 +7,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { fmtNullableAvg, fmtNullablePct, fmtNum } from "@/lib/format";
 import type { ComparePlayerStats } from "@/hooks/use-compare";
-
-function fmtAvg(val: number | undefined | null): string {
-  if (val == null) return "N/A";
-  return val.toFixed(3).replace(/^0/, "");
-}
-
-function fmtPct(val: number | undefined | null): string {
-  if (val == null) return "N/A";
-  return `${val.toFixed(1)}%`;
-}
-
-function fmtNum(val: number | undefined | null, decimals = 0): string {
-  if (val == null) return "N/A";
-  return decimals > 0 ? val.toFixed(decimals) : String(Math.round(val));
-}
 
 interface StatRow {
   label: string;
@@ -62,9 +48,9 @@ const PITCHING_STATS: StatRow[] = [
 function formatValue(val: number | undefined | null, format: StatRow["format"]): string {
   switch (format) {
     case "avg":
-      return fmtAvg(val);
+      return fmtNullableAvg(val, "N/A");
     case "pct":
-      return fmtPct(val);
+      return fmtNullablePct(val);
     case "num1":
       return fmtNum(val, 1);
     case "num":

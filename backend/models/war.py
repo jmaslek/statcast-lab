@@ -25,3 +25,5 @@ class WarLeaderboard(BaseModel):
     batting: list[BattingWarRow]
     pitching: list[PitchingWarRow]
     season: int
+    batting_total: int = 0
+    pitching_total: int = 0

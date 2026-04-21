@@ -6,7 +6,7 @@ How metrics are computed in this project, where the data comes from, and how our
 
 All pitch-level data comes from [Baseball Savant / Statcast](https://baseballsavant.mlb.com/) via the `pybaseball` library. We store every pitch from regular season games with full game context (base-out state, scoring, pitch physics) in ClickHouse.
 
-**Current coverage:** 2024-2025 seasons, ~1.4M regular season pitches, 99.6% coverage on pitch physics columns.
+**Current coverage:** 2020-2026 seasons. ~750K regular season pitches per season, 99.6% coverage on pitch physics columns.
 
 ---
 
@@ -165,11 +165,23 @@ Both sets of weights are stored in `season_linear_weights` for easy comparison.
 
 ### wRC+ (Weighted Runs Created Plus)
 
+Park-adjusted wRC+ measures a hitter's total offensive value on a scale where 100 is league average, adjusting for the run environment of their home park.
+
 ```
-wRC+ = ((wOBA - lg_wOBA) / woba_scale + lg_R/PA) / lg_R/PA * 100
+wRAA/PA = (wOBA - lg_wOBA) / woba_scale
+park_adj = lg_R/PA * (1 - PF)
+wRC+ = ((wRAA/PA + lg_R/PA + park_adj) / lg_R/PA) * 100
 ```
 
-100 is league average. 150 means 50% more run production than average.
+Where:
+- `lg_R/PA = lg_wOBA / woba_scale` (league runs per PA)
+- `PF` = park factor from `season_park_factors` (1.0 = neutral, >1.0 = hitter-friendly)
+
+When park factors are unavailable (e.g., `compute park-factors` hasn't been run), PF defaults to 1.0 and the formula reduces to the non-park-adjusted version.
+
+**Scale:** 100 = league average. 150 = 50% more run production than average. A hitter at Coors Field (PF ~1.20) will see their wRC+ decrease compared to the unadjusted version, reflecting that their home park inflates offense.
+
+**Dependency:** Requires `compute woba` (which reads park factors if available). For full accuracy, run `compute park-factors` before `compute woba`.
 
 ---
 
@@ -191,11 +203,13 @@ We derive IP from outs recorded per pitcher by classifying every PA outcome:
 
 | Outs | Events |
 |------|--------|
-| 1 out | `field_out`, `strikeout`, `force_out`, `fielders_choice_out`, `sac_fly`, `sac_bunt`, `fielders_choice`, `field_error`, etc. |
+| 1 out | `field_out`, `strikeout`, `force_out`, `fielders_choice_out`, `sac_fly`, `sac_bunt`, `fielders_choice`, etc. |
 | 2 outs | `double_play`, `grounded_into_double_play`, `strikeout_double_play`, `sac_bunt_double_play`, `sac_fly_double_play` |
 | 3 outs | `triple_play` |
 
 `IP = total_outs_recorded / 3`
+
+`field_error` and `catcher_interf` are plate appearances but do not record outs, so they are explicitly excluded from the outs bucket.
 
 ### FIP Constant
 
@@ -572,3 +586,73 @@ uv run mlb compute platoon-splits --season 2024 --min-pa 30
 | `pitcher_arsenal` | ReplacingMergeTree | Per-pitcher, per-pitch-type seasonal aggregates |
 | `batter_batted_ball` | ReplacingMergeTree | Per-batter batted ball profiles (type, spray, quality) |
 | `batter_platoon_splits` | ReplacingMergeTree | Per-batter stats vs LHP and vs RHP |
+| `player_percentiles` | ReplacingMergeTree | Percentile ranks for batters and pitchers |
+| `game_plays` | MergeTree | Play-by-play from MLB Stats API |
+| `play_runners` | MergeTree | Runner movement events per play |
+| `abs_challenges` | ReplacingMergeTree | ABS challenge aggregates |
+| `abs_challenge_events` | ReplacingMergeTree | Individual ABS challenge events |
+
+---
+
+## Percentile Rankings
+
+Computed in `pipeline/compute/percentiles.py`. Ranks each batter and pitcher against all qualified players in the same season.
+
+### Batting Percentiles
+
+Metrics ranked: avg exit velo, max exit velo, barrel%, hard hit%, bat speed, swing length, sweet spot%, K%, BB%, whiff%, avg launch angle.
+
+For each metric, the percentile is the percentage of qualified batters that the player exceeds. A 90th percentile in exit velocity means the player hits harder than 90% of qualified batters.
+
+### Pitching Percentiles
+
+Metrics ranked: velocity, max velocity, spin rate, extension, K%, BB%, whiff%, chase%, avg exit velo against.
+
+For pitching metrics where lower is better (exit velo against, BB%), the percentile is inverted so that higher percentile always means better performance.
+
+---
+
+## Bat Tracking Metrics
+
+Queried on-the-fly from the `pitches` table using Statcast's bat tracking columns (`bat_speed`, `swing_length`). Available since the second half of the 2023 season.
+
+| Metric | Definition |
+|--------|-----------|
+| **Avg Bat Speed** | Average bat speed (mph) at the sweet spot across competitive swings |
+| **Max Bat Speed** | Peak bat speed in the season |
+| **Avg Swing Length** | Average distance (ft) the bat head travels from start to contact |
+| **Fast Swing Rate** | Percentage of swings with bat speed >= 75 mph |
+| **Avg Barrel Bat Speed** | Average bat speed on batted balls classified as barrels |
+
+---
+
+## Win Probability (WPA)
+
+Queried on-the-fly from the `pitches` table using Statcast's `home_win_exp` and `delta_home_win_exp` columns. These represent the home team's probability of winning before each pitch and the change in win probability on each pitch.
+
+The WPA chart in the Game Explorer shows `home_win_exp` across all pitches in a game, creating a step chart from the home team's perspective. The area above 50% is shaded for the home team, below 50% for the away team.
+
+**Note:** We use Statcast's pre-computed WPA values rather than deriving our own, since they incorporate a more sophisticated model that accounts for score, inning, base-out state, and run environment.
+
+---
+
+## Pythagorean Win Expectation
+
+Computed on the frontend from standings data (runs scored and runs allowed). Not stored — calculated in real time.
+
+### Formula
+
+```
+Expected Win% = RS^x / (RS^x + RA^x)
+```
+
+### Exponent Options
+
+The standings page provides a slider to adjust the exponent `x`:
+
+| Exponent | Name | Source |
+|----------|------|--------|
+| **2.00** | Classic Pythagorean | Bill James' original formulation |
+| **1.83** | Pythagenpat | Davenport/Woolner refinement used by FanGraphs |
+
+The slider allows values from 1.50 to 2.50 for exploration. Higher exponents amplify the effect of run differential — teams with lopsided RS/RA ratios see more extreme expected win percentages.

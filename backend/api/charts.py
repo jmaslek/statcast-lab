@@ -5,11 +5,14 @@ from backend.models.charts import (
     SprayChartPoint,
     ZoneData,
     ZonePoint,
+    ZoneProfileBin,
+    ZoneProfileData,
     MovementData,
     MovementPoint,
     LeagueAverageMovement,
     PitchTypeSummary,
 )
+from backend.utils import safe_div
 
 
 class ChartController(Controller):
@@ -173,4 +176,82 @@ class ChartController(Controller):
             p_throws=p_throws,
             league_averages=league_avgs,
             pitch_summary=pitch_summary,
+        )
+
+    @get("/zone-profile/{player_id:int}")
+    async def zone_profile(
+        self, client: Client, player_id: int, season: int = 2026,
+        role: str = "batter", metric: str = "whiff_pct",
+    ) -> ZoneProfileData:
+        """Pitch zone profile bucketed into a 7x7 grid with per-bin rates."""
+        col = "batter" if role == "batter" else "pitcher"
+
+        # Use ClickHouse to bucket pitches into a 7x7 grid
+        # x: -1.5 to 1.5 (bin width ~0.4286), z: 1.0 to 4.0 (bin width ~0.4286)
+        result = client.query(
+            f"""
+            SELECT
+                floor((plate_x - (-1.5)) / ((1.5 - (-1.5)) / 7)) AS x_bin,
+                floor((plate_z - 1.0) / ((4.0 - 1.0) / 7)) AS z_bin,
+                count() AS total,
+                countIf(description IN (
+                    'swinging_strike','swinging_strike_blocked','foul_tip'
+                )) AS whiffs,
+                countIf(description IN (
+                    'swinging_strike','swinging_strike_blocked','foul',
+                    'foul_tip','hit_into_play','hit_into_play_no_out',
+                    'hit_into_play_score'
+                )) AS swings,
+                countIf(description LIKE 'called_strike%') AS called_strikes
+            FROM pitches
+            WHERE {col} = {{pid:UInt32}}
+              AND game_year = {{season:UInt16}}
+              AND game_type = 'R'
+              AND plate_x IS NOT NULL
+              AND plate_z IS NOT NULL
+              AND plate_x BETWEEN -1.5 AND 1.5
+              AND plate_z BETWEEN 1.0 AND 4.0
+            GROUP BY x_bin, z_bin
+            """,
+            parameters={"pid": player_id, "season": season},
+        )
+
+        # Compute total pitches for zone_pct
+        grand_total = sum(r[2] for r in result.result_rows) if result.result_rows else 0
+
+        x_width = (1.5 - (-1.5)) / 7
+        z_width = (4.0 - 1.0) / 7
+
+        bins = []
+        for (
+            x_bin, z_bin, total, whiffs, swings, called_strikes,
+        ) in result.result_rows:
+            # Clamp bin indices to 0-6
+            xi = max(0, min(6, int(x_bin)))
+            zi = max(0, min(6, int(z_bin)))
+
+            # Compute bin center
+            center_x = round(-1.5 + (xi + 0.5) * x_width, 2)
+            center_z = round(1.0 + (zi + 0.5) * z_width, 2)
+
+            whiff_pct = round(safe_div(whiffs, swings) * 100, 1) if swings else None
+            swing_pct = round(safe_div(swings, total) * 100, 1) if total else None
+            cs_pct = round(safe_div(called_strikes, total) * 100, 1) if total else None
+            zone_pct = round(safe_div(total, grand_total) * 100, 1) if grand_total else None
+
+            bins.append(ZoneProfileBin(
+                x=center_x,
+                y=center_z,
+                whiff_pct=whiff_pct,
+                swing_pct=swing_pct,
+                called_strike_pct=cs_pct,
+                zone_pct=zone_pct,
+                total=total,
+            ))
+
+        return ZoneProfileData(
+            player_id=player_id,
+            season=season,
+            role=role,
+            bins=bins,
         )

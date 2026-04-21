@@ -1,4 +1,4 @@
-"""Batter platoon splits: batting stats split by pitcher handedness."""
+"""Batter stats split by pitcher handedness (vs LHP / vs RHP)."""
 
 import polars as pl
 from loguru import logger
@@ -11,16 +11,14 @@ def compute_platoon_splits_for_season(
     season: int,
     min_pa: int = 30,
 ) -> int:
-    """Compute platoon splits for a season. Returns row count written."""
-    logger.info("Computing platoon splits for %d (min_pa=%d)...", season, min_pa)
+    logger.info("Platoon splits for {} (min_pa={})", season, min_pa)
 
+    # AB definition mirrors player_season_hitting_mv to keep numbers consistent.
     result = client.query(
         """
         SELECT
             batter,
             p_throws,
-
-            -- Plate appearance counting (mirrors player_season_hitting)
             count() AS pa,
             countIf(events IN (
                 'single', 'double', 'triple', 'home_run',
@@ -35,26 +33,20 @@ def compute_platoon_splits_for_season(
             countIf(events IN ('strikeout', 'strikeout_double_play')) AS strikeouts,
             countIf(events = 'hit_by_pitch') AS hbp,
             countIf(events = 'sac_fly') AS sac_flies,
-            countIf(events = 'single') * 1
+            countIf(events = 'single')
                 + countIf(events = 'double') * 2
                 + countIf(events = 'triple') * 3
                 + countIf(events = 'home_run') * 4 AS total_bases,
-
-            -- Batted ball quality
             countIf(barrel = 1) AS barrel_count,
             countIf(launch_speed IS NOT NULL) AS batted_ball_events,
             countIf(launch_speed >= 95) AS hard_hit_count,
-
-            -- Expected stats
             ifNull(sumIf(estimated_woba_using_speedangle,
                          estimated_woba_using_speedangle IS NOT NULL), 0) AS xwoba_sum,
             countIf(estimated_woba_using_speedangle IS NOT NULL) AS xwoba_count
-
         FROM pitches
         WHERE game_year = {season:UInt16}
           AND game_type = 'R'
-          AND events IS NOT NULL
-          AND events != 'truncated_pa'
+          AND events IS NOT NULL AND events != 'truncated_pa'
         GROUP BY batter, p_throws
         HAVING pa >= {min_pa:UInt32}
         ORDER BY batter, p_throws
@@ -86,62 +78,18 @@ def compute_platoon_splits_for_season(
     ]
     df = pl.DataFrame(result.result_rows, schema=columns, orient="row")
 
-    logger.info("Processing %d batter-split rows...", len(df))
+    final = df.with_columns(
+        pl.lit(season).cast(pl.UInt16).alias("season"),
+    ).select([
+        "batter", "season", "p_throws",
+        "pa", "ab", "hits", "home_runs", "walks", "strikeouts",
+        "hbp", "sac_flies", "total_bases",
+        "barrel_count", "batted_ball_events", "hard_hit_count",
+        "xwoba_sum", "xwoba_count",
+    ])
 
-    df = df.with_columns(
-        [
-            pl.lit(season).cast(pl.UInt16).alias("season"),
-        ]
-    )
-
-    final = df.select(
-        [
-            "batter",
-            "season",
-            "p_throws",
-            "pa",
-            "ab",
-            "hits",
-            "home_runs",
-            "walks",
-            "strikeouts",
-            "hbp",
-            "sac_flies",
-            "total_bases",
-            "barrel_count",
-            "batted_ball_events",
-            "hard_hit_count",
-            "xwoba_sum",
-            "xwoba_count",
-        ]
-    )
-
-    logger.info("Writing platoon split data for %d rows...", len(final))
     delete_season(client, "batter_platoon_splits", season)
+    client.insert_df("batter_platoon_splits", final.to_pandas())
 
-    client.insert(
-        "batter_platoon_splits",
-        final.rows(),
-        column_names=[
-            "batter",
-            "season",
-            "p_throws",
-            "pa",
-            "ab",
-            "hits",
-            "home_runs",
-            "walks",
-            "strikeouts",
-            "hbp",
-            "sac_flies",
-            "total_bases",
-            "barrel_count",
-            "batted_ball_events",
-            "hard_hit_count",
-            "xwoba_sum",
-            "xwoba_count",
-        ],
-    )
-
-    logger.info("Wrote %d platoon split rows for %d", len(final), season)
+    logger.info("Wrote {} platoon split rows for {}", len(final), season)
     return len(final)

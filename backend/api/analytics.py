@@ -1,6 +1,8 @@
 from litestar import Controller, get
 from backend.db import Client
 from backend.models.analytics import (
+    RECountEntry,
+    RECountMatrixData,
     REMatrixData,
     REMatrixEntry,
     LinearWeightsData,
@@ -8,6 +10,19 @@ from backend.models.analytics import (
     ParkFactorsData,
     ParkFactorRow,
 )
+
+
+def _decode_runners(base_out_state: int) -> tuple[int, str]:
+    """Decode base_out_state (0-23) into (outs, runners_string)."""
+    base_state = base_out_state // 3
+    outs = base_out_state % 3
+    on_1b = bool(base_state & 1)
+    on_2b = bool(base_state & 2)
+    on_3b = bool(base_state & 4)
+    runners = (
+        ("1" if on_1b else "-") + ("2" if on_2b else "-") + ("3" if on_3b else "-")
+    )
+    return outs, runners
 
 
 class AnalyticsController(Controller):
@@ -90,3 +105,28 @@ class AnalyticsController(Controller):
             for r in result.result_rows
         ]
         return ParkFactorsData(season=season, factors=factors)
+
+    @get("/re-count-matrix")
+    async def re_count_matrix(self, client: Client, season: int = 2025) -> RECountMatrixData:
+        result = client.query(
+            """
+            SELECT base_out_state, balls, strikes, expected_runs, occurrences
+            FROM season_re_count_matrix FINAL
+            WHERE season = {season:UInt16}
+            ORDER BY base_out_state, balls, strikes
+            """,
+            parameters={"season": season},
+        )
+        entries = []
+        for base_out_state, balls, strikes, expected_runs, occurrences in result.result_rows:
+            outs, runners = _decode_runners(base_out_state)
+            entries.append(RECountEntry(
+                base_out_state=base_out_state,
+                outs=outs,
+                runners_on=runners,
+                balls=balls,
+                strikes=strikes,
+                expected_runs=expected_runs,
+                occurrences=occurrences,
+            ))
+        return RECountMatrixData(season=season, entries=entries)
